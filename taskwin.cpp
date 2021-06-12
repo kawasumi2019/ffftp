@@ -35,15 +35,17 @@ extern int SepaWidth;
 extern int ListHeight;
 extern int TaskHeight;
 extern HFONT ListFont;
-extern int DebugConsole;
 extern int RemoveOldLog;
+int DebugConsole = NO;
 static HWND hWndTask = NULL;
 static Concurrency::concurrent_queue<std::wstring> queue;
 
 static VOID CALLBACK Writer(HWND hwnd, UINT, UINT_PTR, DWORD) {
 	std::wstring local;
-	for (std::wstring temp; queue.try_pop(temp);)
+	for (std::wstring temp; queue.try_pop(temp);) {
 		local += temp;
+		local += L"\r\n"sv;
+	}
 	if (empty(local))
 		return;
 	if (auto length = GetWindowTextLengthW(hwnd); RemoveOldLog == YES) {
@@ -94,12 +96,10 @@ void SetTaskMsg(_In_z_ _Printf_format_string_ const char* format, ...) {
 	char buffer[10240 + 3];
 	va_list args;
 	va_start(args, format);
-	int result = vsprintf(buffer, format, args);
+	int result = vsprintf_s(buffer, format, args);
 	va_end(args);
-	if (0 < result) {
-		strcat(buffer, "\r\n");
-		queue.push(u8(buffer));
-	}
+	if (0 < result)
+		queue.push(u8(buffer, result));
 }
 
 
@@ -110,21 +110,36 @@ void DispTaskMsg() {
 		fs::remove(temp);
 		return;
 	}
-	auto path = temp.u8string();
 	AddTempFileList(temp);
-	ExecViewer(data(path), 0);
+	ExecViewer(temp, 0);
 }
 
 
-// デバッグコンソールにメッセージを表示する
-void DoPrintf(_In_z_ _Printf_format_string_ const char* format, ...) {
-	if (DebugConsole != YES)
-		return;
-	char buffer[10240];
+void SetTaskMsg(UINT id, ...) {
+	wchar_t buffer[10240];
 	va_list args;
-	va_start(args, format);
-	int result = vsprintf(buffer, format, args);
+	va_start(args, id);
+	int result = vswprintf_s(buffer, GetString(id).c_str(), args);
 	va_end(args);
 	if (0 < result)
-		SetTaskMsg("## %s", buffer);
+		queue.push({ buffer, static_cast<size_t>(result) });
+}
+
+void detail::Notice(UINT id, std::wformat_args args) {
+	auto const format = GetString(id);
+	auto message = std::vformat(format, args);
+	queue.push(std::move(message));
+}
+
+void detail::Debug(std::wstring_view format, std::wformat_args args) {
+	if (DebugConsole != YES)
+		return;
+	auto message = std::vformat(format, args);
+	message.insert(0, L"## "sv);
+	queue.push(std::move(message));
+}
+
+void Error(std::wstring_view functionName, int lastError) {
+	if (DebugConsole == YES)
+		Debug(L"{}() failed: {}"sv, functionName, GetErrorMessage(lastError));
 }

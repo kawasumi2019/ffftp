@@ -32,12 +32,6 @@
 #include <delayimp.h>
 #include <HtmlHelp.h>
 #pragma comment(lib, "HtmlHelp.lib")
-#if _WIN32_WINNT < _WIN32_WINNT_VISTA
-#include <muiload.h>
-#pragma comment(lib, "muiload.lib")
-#pragma comment(lib, "legacy_stdio_definitions.lib")
-#endif
-
 
 #define RESIZE_OFF		0		/* ウインドウの区切り位置変更していない */
 #define RESIZE_ON		1		/* ウインドウの区切り位置変更中 */
@@ -78,7 +72,7 @@ static LRESULT CALLBACK FtpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 static void StartupProc(std::vector<std::wstring_view> const& args);
 static std::optional<int> AnalyzeComLine(std::vector<std::wstring_view> const& args, std::wstring& hostname, std::wstring& unc);
 static void ExitProc(HWND hWnd);
-static void ChangeDir(int Win, char *Path);
+static void ChangeDir(int Win, std::wstring_view dir);
 static void ResizeWindowProc(void);
 static void CalcWinSize(void);
 static void CheckResizeFrame(WPARAM Keys, int x, int y);
@@ -100,7 +94,6 @@ static HACCEL Accel;
 
 static int Resizing = RESIZE_OFF;
 static int ResizePos;
-static HCURSOR hCursor;
 
 int ClientWidth;
 static int ClientHeight;
@@ -119,11 +112,8 @@ static int ForceIni = NO;
 TRANSPACKET MainTransPkt;		/* ファイル転送用パケット */
 								/* これを使って転送を行うと、ツールバーの転送 */
 								/* 中止ボタンで中止できる */
-
-char TitleHostName[HOST_ADRS_LEN+1];
-char FilterStr[FILTER_EXT_LEN+1] = { "*" };
-char TitleUserName[USER_NAME_LEN+1];
-
+std::wstring TitleHostName;
+std::wstring FilterStr = L"*"s;
 int CancelFlg;
 
 int SuppressRefresh = 0;
@@ -139,9 +129,6 @@ static int ToolWinHeight;
 /*===== グローバルなワーク =====*/
 
 static HWND hHelpWin = NULL;
-std::map<int, std::string> msgs;
-HCRYPTPROV HCryptProv;
-bool SupportIdn;
 
 /* 設定値 */
 int WinPosX = CW_USEDEFAULT;
@@ -150,10 +137,11 @@ int WinWidth = 790;
 int WinHeight = 513;
 int LocalWidth = 389;
 int TaskHeight = 100;
-int LocalTabWidth[4] = { 150, 120, 60, 37 };
-int RemoteTabWidth[6] = { 150, 120, 60, 37, 60, 60 };
-char UserMailAdrs[USER_MAIL_LEN+1] = { "who@example.com" };
-char ViewerName[VIEWERS][FMAX_PATH+1] = { { "notepad" }, { "" }, { "" } };
+int LocalTabWidthDefault[4] = { 150, 120, 60, 37 };
+int LocalTabWidth[4];
+int RemoteTabWidthDefault[6] = { 150, 120, 60, 37, 60, 60 };
+int RemoteTabWidth[6];
+std::wstring ViewerName[VIEWERS] = { L"notepad"s };
 HFONT ListFont = NULL;
 int LocalFileSort = SORT_NAME;
 int LocalDirSort = SORT_NAME;
@@ -161,27 +149,21 @@ int RemoteFileSort = SORT_NAME;
 int RemoteDirSort = SORT_NAME;
 int TransMode = TYPE_X;
 int ConnectOnStart = YES;
-int DebugConsole = NO;
 int SaveWinPos = NO;
-char AsciiExt[ASCII_EXT_LEN+1] = { "*.txt\0*.html\0*.htm\0*.cgi\0*.pl\0*.js\0*.vbs\0*.css\0*.rss\0*.rdf\0*.xml\0*.xhtml\0*.xht\0*.shtml\0*.shtm\0*.sh\0*.py\0*.rb\0*.properties\0*.sql\0*.asp\0*.aspx\0*.php\0*.htaccess\0" };
 int RecvMode = TRANS_DLG;
 int SendMode = TRANS_DLG;
 int MoveMode = MOVE_DLG;
 int ListType = LVS_REPORT;
-char DefaultLocalPath[FMAX_PATH+1] = { "" };
+std::wstring DefaultLocalPath;
 int SaveTimeStamp = YES;
 int FindMode = 0;
 int DotFile = YES;
 int DclickOpen = YES;
 int ConnectAndSet = YES;
-SOUNDFILE Sound[SOUND_TYPES] = { { NO, "" }, { NO, "" }, { NO, "" } };
 int FnameCnv = FNAME_NOCNV;
 int TimeOut = 90;
 int RmEOF = NO;
 int RegType = REGTYPE_REG;
-char FwallHost[HOST_ADRS_LEN+1] = { "" };
-char FwallUser[USER_NAME_LEN+1] = { "" };
-char FwallPass[PASSWORD_LEN+1] = { "" };
 int FwallPort = IPPORT_FTP;
 int FwallType = 1;
 int FwallDefault = NO;
@@ -190,13 +172,10 @@ int FwallResolve = NO;
 int FwallLower = NO;
 int FwallDelimiter = '@';
 int PasvDefault = YES;
-char MirrorNoTrn[MIRROR_LEN+1] = { "*.bak\0" };
-char MirrorNoDel[MIRROR_LEN+1] = { "" };
 int MirrorFnameCnv = NO;
 int SplitVertical = YES;
 int RasClose = NO;
 int RasCloseNotify = YES;
-char DefAttrList[DEFATTRLIST_LEN+1] = { "" };
 SIZE HostDlgSize = { -1, -1 };
 SIZE BmarkDlgSize = { -1, -1 };
 SIZE MirrorDlgSize = { -1, -1 };
@@ -231,8 +210,8 @@ int FwallNoSaveUser = NO;
 int MarkAsInternet = YES; 
 
 
-fs::path systemDirectory() {
-	static auto path = [] {
+fs::path const& systemDirectory() {
+	static auto const path = [] {
 		wchar_t directory[FMAX_PATH];
 		auto length = GetSystemDirectoryW(directory, size_as<UINT>(directory));
 		assert(0 < length);
@@ -242,8 +221,8 @@ fs::path systemDirectory() {
 }
 
 
-static auto const& moduleDirectory() {
-	static const auto directory = [] {
+fs::path const& moduleDirectory() {
+	static auto const directory = [] {
 		wchar_t directory[FMAX_PATH];
 		const auto length = GetModuleFileNameW(nullptr, directory, size_as<DWORD>(directory));
 		assert(0 < length);
@@ -276,29 +255,37 @@ static auto const& helpPath() {
 	return path;
 }
 
+Sound Sound::Connected{ L"FFFTP_Connected", L"Connected", IDS_SOUNDCONNECTED };
+Sound Sound::Transferred{ L"FFFTP_Transferred", L"Transferred", IDS_SOUNDTRANSFERRED };
+Sound Sound::Error{ L"FFFTP_Error", L"Error", IDS_SOUNDERROR };
+void Sound::Register() {
+	if (HKEY eventlabels; RegCreateKeyExW(HKEY_CURRENT_USER, LR"(AppEvents\EventLabels)", 0, nullptr, 0, KEY_WRITE, nullptr, &eventlabels, nullptr) == ERROR_SUCCESS) {
+		if (HKEY apps; RegCreateKeyExW(HKEY_CURRENT_USER, LR"(AppEvents\Schemes\Apps\ffftp)", 0, nullptr, 0, KEY_WRITE, nullptr, &apps, nullptr) == ERROR_SUCCESS) {
+			RegSetValueExW(apps, nullptr, 0, REG_SZ, reinterpret_cast<const BYTE*>(L"FFFTP"), 12);
+			for (auto [keyName, name, id] : { Connected, Transferred, Error }) {
+				if (HKEY key; RegCreateKeyExW(eventlabels, keyName, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) == ERROR_SUCCESS) {
+					RegSetValueExW(key, nullptr, 0, REG_SZ, reinterpret_cast<const BYTE*>(name), ((DWORD)wcslen(name) + 1) * sizeof(wchar_t));
+					auto value = strprintf(L"@%s,%d", (moduleDirectory() / L"ffftp.exe"sv).c_str(), -id);
+					RegSetValueExW(key, L"DispFileName", 0, REG_SZ, reinterpret_cast<const BYTE*>(value.c_str()), (size_as<DWORD>(value) + 1) * sizeof(wchar_t));
+				}
+				if (HKEY key; RegCreateKeyExW(apps, keyName, 0, nullptr, 0, KEY_WRITE, nullptr, &key, nullptr) == ERROR_SUCCESS) {
+					if (HKEY _current; RegCreateKeyExW(key, L".current", 0, nullptr, 0, KEY_WRITE, nullptr, &_current, nullptr) == ERROR_SUCCESS)
+						RegCloseKey(_current);
+					RegCloseKey(key);
+				}
+			}
+			RegCloseKey(apps);
+		}
+		RegCloseKey(eventlabels);
+	}
+}
+
 
 // メインルーチン
 int WINAPI wWinMain(__in HINSTANCE hInstance, __in_opt HINSTANCE hPrevInstance, __in LPWSTR lpCmdLine, __in int nShowCmd) {
-#if _WIN32_WINNT < _WIN32_WINNT_VISTA
-	{
-		wchar_t moduleFileName[FMAX_PATH];
-		GetModuleFileNameW(nullptr, moduleFileName, FMAX_PATH);
-		auto const fileName = fs::path{ moduleFileName }.filename();
-		hInstFtp = LoadMUILibraryW(fileName.c_str(), MUI_LANGUAGE_NAME, GetUserDefaultUILanguage());
-		if (hInstFtp == NULL)
-			hInstFtp = LoadMUILibraryW(fileName.c_str(), MUI_LANGUAGE_NAME, LANG_NEUTRAL);
-	}
-#else
 	hInstFtp = hInstance;
-#endif
-	EnumResourceNames(GetFtpInst(), RT_STRING, [](auto hModule, auto lpType, auto lpName, auto lParam) -> BOOL {
-		wchar_t buffer[1024];
-		if (IS_INTRESOURCE(lpName))
-			for (int id = (PtrToInt(lpName) - 1) * 16, end = id + 16; id < end; id++)
-				if (auto length = LoadStringW(hModule, id, buffer, size_as<int>(buffer)); 0 < length)
-					msgs.emplace(id, u8(buffer, length));
-		return true;
-	}, 0);
+
+	Sound::Register();
 
 	// マルチコアCPUの特定環境下でファイル通信中にクラッシュするバグ対策
 #ifdef DISABLE_MULTI_CPUS
@@ -314,23 +301,6 @@ int WINAPI wWinMain(__in HINSTANCE hInstance, __in_opt HINSTANCE hPrevInstance, 
 	LoadUPnP();
 	LoadTaskbarList3();
 	LoadZoneID();
-
-#if _WIN32_WINNT < _WIN32_WINNT_VISTA
-	// Vista以降およびIE7以降で導入済みとなる
-	SupportIdn = [] {
-		if (auto module = LoadLibraryW((systemDirectory() / L"Normaliz.dll"sv).c_str()); !module)
-			return false;
-		__HrLoadAllImportsForDll("Normaliz.dll");
-		return true;
-	}();
-#else
-	SupportIdn = true;
-#endif
-
-	if (!CryptAcquireContextW(&HCryptProv, nullptr, nullptr, PROV_RSA_AES, CRYPT_VERIFYCONTEXT)) {
-		Message(IDS_ERR_CRYPTO, MB_OK | MB_ICONERROR);
-		return 0;
-	}
 
 	if (!LoadSSL()) {
 		Message(IDS_ERR_SSL, MB_OK | MB_ICONERROR);
@@ -354,7 +324,6 @@ int WINAPI wWinMain(__in HINSTANCE hInstance, __in_opt HINSTANCE hPrevInstance, 
 	}
 	UnregisterClassW(FtpClass, GetFtpInst());
 	FreeSSL();
-	CryptReleaseContext(HCryptProv, 0);
 	FreeZoneID();
 	FreeTaskbarList3();
 	FreeUPnP();
@@ -373,8 +342,6 @@ static int InitApp(int cmdShow)
 	int masterpass;
 	// ポータブル版判定
 	int ImportPortable;
-	// 高DPI対応
-	int i;
 
 	sts = FFFTP_FAIL;
 	
@@ -391,10 +358,12 @@ static int InitApp(int cmdShow)
 		WinHeight = CalcPixelY(WinHeight);
 		LocalWidth = CalcPixelX(LocalWidth);
 		TaskHeight = CalcPixelY(TaskHeight);
-		for(i = 0; i < sizeof(LocalTabWidth) / sizeof(int); i++)
-			LocalTabWidth[i] = CalcPixelX(LocalTabWidth[i]);
-		for(i = 0; i < sizeof(RemoteTabWidth) / sizeof(int); i++)
-			RemoteTabWidth[i] = CalcPixelX(RemoteTabWidth[i]);
+		for (auto& width : LocalTabWidthDefault)
+			width = CalcPixelX(width);
+		std::copy(std::begin(LocalTabWidthDefault), std::end(LocalTabWidthDefault), std::begin(LocalTabWidth));
+		for (auto& width : RemoteTabWidthDefault)
+			width = CalcPixelX(width);
+		std::copy(std::begin(RemoteTabWidthDefault), std::end(RemoteTabWidthDefault), std::begin(RemoteTabWidth));
 
 		std::vector<std::wstring_view> args{ __wargv + 1, __wargv + __argc };
 		if (auto it = std::find_if(begin(args), end(args), [](auto const& arg) { return ieq(arg, L"-n"sv) || ieq(arg, L"--ini"sv); }); it != end(args) && ++it != end(args)) {
@@ -447,12 +416,12 @@ static int InitApp(int cmdShow)
 		*/
 		if(auto it = std::find_if(begin(args), end(args), [](auto const& arg) { return ieq(arg, L"-z"sv) || ieq(arg, L"--mpasswd"sv); }); it != end(args) && ++it != end(args))
 		{
-			SetMasterPassword(u8(*it).c_str());
+			SetMasterPassword(*it);
 			useDefautPassword = 0;
 		}
 		else {
 			/* パスワード指定無し */
-			SetMasterPassword( NULL );
+			SetMasterPassword();
 			/* この場では表示できないのでフラグだけ立てておく*/
 			useDefautPassword = 2;
 		}
@@ -505,8 +474,8 @@ static int InitApp(int cmdShow)
 			{
 				hWndCurFocus = GetLocalHwnd();
 
-				if (std::error_code ec; strlen(DefaultLocalPath) > 0)
-					fs::current_path(fs::u8path(DefaultLocalPath), ec);
+				if (std::error_code ec; !empty(DefaultLocalPath))
+					fs::current_path(DefaultLocalPath, ec);
 
 				SetSortTypeImm(LocalFileSort, LocalDirSort, RemoteFileSort, RemoteDirSort);
 				SetTransferTypeImm(TransMode);
@@ -521,19 +490,19 @@ static int InitApp(int cmdShow)
 
 				if(MakeTransferThread() == FFFTP_SUCCESS)
 				{
-					DoPrintf("DEBUG MESSAGE ON ! ##");
+					Debug(L"DEBUG MESSAGE ON ! ##"sv);
 
 					DispWindowTitle();
 					UpdateStatusBar();
 					SetTaskMsg("FFFTP Ver." VER_STR " Copyright(C) 1997-2010 Sota & cooperators.\r\n"
 						"Copyright (C) 2011-2018 FFFTP Project (Hiromichi Matsushima, Suguru Kawamoto, IWAMOTO Kouichi, vitamin0x, unarist, Asami, fortran90, tomo1192, Yuji Tanaka, Moriguchi Hirokazu, Fu-sen, potato).\r\n"
-						"Copyright (C) 2018-2020, Kurata Sayuri."
+						"Copyright (C) 2018-2021, Kurata Sayuri."
 					);
 
 					if(ForceIni)
-						SetTaskMsg("%s%s", MSGJPN283, IniPath.u8string().c_str());
+						SetTaskMsg(IDS_MSGJPN283, IniPath.c_str());
 
-					DoPrintf("Help=%s", helpPath().u8string().c_str());
+					Debug(L"Help={}", helpPath().native());
 
 					DragAcceptFiles(GetRemoteHwnd(), TRUE);
 					DragAcceptFiles(GetLocalHwnd(), TRUE);
@@ -548,16 +517,16 @@ static int InitApp(int cmdShow)
 
 					/* セキュリティ警告文の表示 */
 					if( useDefautPassword ){
-						SetTaskMsg(MSGJPN300);
+						SetTaskMsg(IDS_MSGJPN300);
 					}
 					
 					/* パスワード不一致警告文の表示 */
 					switch( GetMasterPasswordStatus() ){
 					case PASSWORD_UNMATCH:
-						SetTaskMsg(MSGJPN301);
+						SetTaskMsg(IDS_MSGJPN301);
 						break;
 					case BAD_PASSWORD_HASH:
-						SetTaskMsg(MSGJPN302);
+						SetTaskMsg(IDS_MSGJPN302);
 						break;
 					default:
 						break;
@@ -626,12 +595,10 @@ static bool MakeAllWindows(int cmdShow) {
 
 // ウインドウのタイトルを表示する
 void DispWindowTitle() {
-	char text[HOST_ADRS_LEN + FILTER_EXT_LEN + 20];
-	if (AskConnecting() == YES)
-		sprintf(text, "%s (%s) - FFFTP", TitleHostName, FilterStr);
-	else
-		sprintf(text, "FFFTP (%s)", FilterStr);
-	SetWindowTextW(GetMainHwnd(), u8(text).c_str());
+	auto const text = AskConnecting() == YES
+		? strprintf(L"%s (%s) - FFFTP", TitleHostName.c_str(), FilterStr.c_str())
+		: strprintf(L"FFFTP (%s)", FilterStr.c_str());
+	SetWindowTextW(GetMainHwnd(), text.c_str());
 }
 
 
@@ -728,15 +695,14 @@ static LRESULT CALLBACK FtpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 						FindNextChangeNotification(ChangeNotification);
 						if(AutoRefreshFileList == YES)
 						{
-							char Name[FMAX_PATH+1];
 							int Pos;
 							std::vector<FILELIST> Base;
 							MakeSelectedFileList(WIN_LOCAL, NO, NO, Base, &CancelFlg);
-							GetHotSelected(WIN_LOCAL, Name);
+							auto const name = GetHotSelected(WIN_LOCAL);
 							Pos = (int)SendMessageW(GetLocalHwnd(), LVM_GETTOPINDEX, 0, 0);
 							GetLocalDirForWnd();
 							SelectFileInList(GetLocalHwnd(), SELECT_LIST, Base);
-							SetHotSelected(WIN_LOCAL, Name);
+							SetHotSelected(WIN_LOCAL, name);
 							SendMessageW(GetLocalHwnd(), LVM_ENSUREVISIBLE, (WPARAM)(SendMessageW(GetLocalHwnd(), LVM_GETITEMCOUNT, 0, 0) - 1), true);
 							SendMessageW(GetLocalHwnd(), LVM_ENSUREVISIBLE, (WPARAM)Pos, true);
 						}
@@ -923,7 +889,7 @@ static LRESULT CALLBACK FtpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 						break;
 					SuppressRefresh = 1;
 					SetCurrentDirAsDirHist();
-					ChangeDir(WIN_REMOTE, "..");
+					ChangeDir(WIN_REMOTE, L".."sv);
 					SuppressRefresh = 0;
 					break;
 
@@ -931,7 +897,7 @@ static LRESULT CALLBACK FtpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 					if (AskUserOpeDisabled())
 						break;
 					SetCurrentDirAsDirHist();
-					ChangeDir(WIN_LOCAL, "..");
+					ChangeDir(WIN_LOCAL, L".."sv);
 					break;
 
 				case MENU_REMOTE_CHDIR :
@@ -968,7 +934,8 @@ static LRESULT CALLBACK FtpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 
 				case MENU_DOWNLOAD_NAME :
 					SetCurrentDirAsDirHist();
-					InputDownloadProc();
+					if (std::wstring path; InputDialog(downname_dlg, GetMainHwnd(), 0, path, FMAX_PATH))
+						DirectDownloadProc(path);
 					break;
 
 				case MENU_UPLOAD :
@@ -1246,7 +1213,6 @@ static LRESULT CALLBACK FtpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 					break;
 
 				case MENU_REGSAVE :
-					GetListTabWidth();
 					SaveRegistry();
 					SaveSettingsToFile();
 					break;
@@ -1277,13 +1243,12 @@ static LRESULT CALLBACK FtpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 						if (!Dialog(GetFtpInst(), forcepasschange_dlg, hWnd))
 							break;
 						if(EnterMasterPasswordAndSet(true, hWnd) != 0)
-							SetTaskMsg(MSGJPN303);
+							SetTaskMsg(IDS_MSGJPN303);
 					}
 					else if(GetMasterPasswordStatus() == PASSWORD_OK)
 					{
-						char Password[MAX_PASSWORD_LEN + 1];
-						GetMasterPassword(Password);
-						SetMasterPassword(NULL);
+						auto const password = GetMasterPassword();
+						SetMasterPassword();
 						while(ValidateMasterPassword() == YES && GetMasterPasswordStatus() == PASSWORD_UNMATCH)
 						{
 							if(EnterMasterPasswordAndSet(false, hWnd) == 0)
@@ -1291,12 +1256,12 @@ static LRESULT CALLBACK FtpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 						}
 						if(GetMasterPasswordStatus() == PASSWORD_OK && EnterMasterPasswordAndSet(true, hWnd) != 0)
 						{
-							SetTaskMsg(MSGJPN303);
+							SetTaskMsg(IDS_MSGJPN303);
 							SaveRegistry();
 						}
 						else
 						{
-							SetMasterPassword(Password);
+							SetMasterPassword(password);
 							ValidateMasterPassword();
 						}
 					}
@@ -1353,9 +1318,8 @@ static LRESULT CALLBACK FtpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 					// 平文で出力するためマスターパスワードを再確認
 					if(GetMasterPasswordStatus() == PASSWORD_OK)
 					{
-						char Password[MAX_PASSWORD_LEN + 1];
-						GetMasterPassword(Password);
-						SetMasterPassword(NULL);
+						auto const password = GetMasterPassword();
+						SetMasterPassword();
 						while(ValidateMasterPassword() == YES && GetMasterPasswordStatus() == PASSWORD_UNMATCH)
 						{
 							if(EnterMasterPasswordAndSet(false, hWnd) == 0)
@@ -1365,7 +1329,7 @@ static LRESULT CALLBACK FtpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 							SaveSettingsToFileZillaXml();
 						else
 						{
-							SetMasterPassword(Password);
+							SetMasterPassword(password);
 							ValidateMasterPassword();
 						}
 					}
@@ -1376,9 +1340,8 @@ static LRESULT CALLBACK FtpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 					// 平文で出力するためマスターパスワードを再確認
 					if(GetMasterPasswordStatus() == PASSWORD_OK)
 					{
-						char Password[MAX_PASSWORD_LEN + 1];
-						GetMasterPassword(Password);
-						SetMasterPassword(NULL);
+						auto const password = GetMasterPassword();
+						SetMasterPassword();
 						while(ValidateMasterPassword() == YES && GetMasterPasswordStatus() == PASSWORD_UNMATCH)
 						{
 							if(EnterMasterPasswordAndSet(false, hWnd) == 0)
@@ -1388,7 +1351,7 @@ static LRESULT CALLBACK FtpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 							SaveSettingsToWinSCPIni();
 						else
 						{
-							SetMasterPassword(Password);
+							SetMasterPassword(password);
 							ValidateMasterPassword();
 						}
 					}
@@ -1550,27 +1513,13 @@ static LRESULT CALLBACK FtpWndProc(HWND hWnd, UINT message, WPARAM wParam, LPARA
 				PostMessageW(hWnd,  WM_COMMAND, MAKEWPARAM(REFRESH_REMOTE, 0), 0);
 			break;
 
-		// UPnP対応
-		case WM_ADDPORTMAPPING :
-			((ADDPORTMAPPINGDATA*)lParam)->r = AddPortMapping(((ADDPORTMAPPINGDATA*)lParam)->Adrs, ((ADDPORTMAPPINGDATA*)lParam)->Port, ((ADDPORTMAPPINGDATA*)lParam)->ExtAdrs);
-			SetEvent(((ADDPORTMAPPINGDATA*)lParam)->h);
-			break;
-
-		case WM_REMOVEPORTMAPPING :
-			((REMOVEPORTMAPPINGDATA*)lParam)->r = RemovePortMapping(((REMOVEPORTMAPPINGDATA*)lParam)->Port);
-			SetEvent(((REMOVEPORTMAPPINGDATA*)lParam)->h);
-			break;
-
 		// 同時接続対応
 		case WM_RECONNECTSOCKET :
 			ReconnectProc();
 			break;
 
-		// ゾーンID設定追加
-		case WM_MARKFILEASDOWNLOADEDFROMINTERNET :
-			((MARKFILEASDOWNLOADEDFROMINTERNETDATA*)lParam)->r = MarkFileAsDownloadedFromInternet(((MARKFILEASDOWNLOADEDFROMINTERNETDATA*)lParam)->Fname);
-			SetEvent(((MARKFILEASDOWNLOADEDFROMINTERNETDATA*)lParam)->h);
-			break;
+		case WM_MAINTHREADRUNNER:
+			return reinterpret_cast<MainThreadRunner*>(lParam)->Run();
 
 		case WM_PAINT :
 			BeginPaint(hWnd, (LPPAINTSTRUCT) &ps);
@@ -1625,16 +1574,14 @@ static void StartupProc(std::vector<std::wstring_view> const& args) {
 			if (ConnectOnStart == YES)
 				PostMessageW(GetMainHwnd(), WM_COMMAND, MAKEWPARAM(MENU_CONNECT, 0), 0);
 		} else if (empty(hostname) && !empty(unc)) {
-			auto u8unc = u8(unc);
-			DirectConnectProc(data(u8unc), Kanji, Kana, FnameKanji, TrMode);
+			DirectConnectProc(std::move(unc), Kanji, Kana, FnameKanji, TrMode);
 		} else if (!empty(hostname) && empty(unc)) {
-			auto u8hostname = u8(hostname);
-			if (int AutoConnect = SearchHostName(data(u8hostname)); AutoConnect == -1)
-				__pragma(warning(suppress:4474)) SetTaskMsg(MSGJPN177, u8hostname.c_str());
+			if (int AutoConnect = SearchHostName(hostname); AutoConnect == -1)
+				SetTaskMsg(IDS_MSGJPN177, hostname.c_str());
 			else
 				PostMessageW(GetMainHwnd(), WM_COMMAND, MAKEWPARAM(MENU_CONNECT_NUM, opt), (LPARAM)AutoConnect);
 		} else {
-			SetTaskMsg(MSGJPN179);
+			SetTaskMsg(IDS_MSGJPN179);
 		}
 	}
 }
@@ -1671,24 +1618,25 @@ static std::optional<int> AnalyzeComLine(std::vector<std::wstring_view> const& a
 				option |= mapit->second;
 			} else if (key == L"-n"sv || key == L"--ini"sv) {
 				if (++it == end(args)) {
-					SetTaskMsg(MSGJPN282);
+					SetTaskMsg(IDS_MSGJPN282);
 					return {};
 				}
 			} else if (key == L"-z"sv || key == L"--mpasswd"sv) {
 				if (++it == end(args)) {
-					SetTaskMsg(MSGJPN299);
+					SetTaskMsg(IDS_MSGJPN299);
 					return {};
 				}
 			} else if (key == L"-s"sv || key == L"--set"sv) {
 				if (++it == end(args)) {
-					SetTaskMsg(MSGJPN178);
+					SetTaskMsg(IDS_MSGJPN178);
 					return {};
 				}
 				hostname = *it;
 			} else if (key == L"-h"sv || key == L"--help"sv) {
 				ShowHelp(IDH_HELP_TOPIC_0000024);
 			} else {
-				__pragma(warning(suppress:4474)) SetTaskMsg(MSGJPN180, u8(*it).c_str());
+				// argsはargvを指しておりnull terminatedである。
+				SetTaskMsg(IDS_MSGJPN180, it->data());
 				return {};
 			}
 		} else
@@ -1729,7 +1677,6 @@ static void ExitProc(HWND hWnd)
 
 	if(SaveExit == YES)
 	{
-		GetListTabWidth();
 		SaveRegistry();
 		// ポータブル版判定
 		if(RegType == REGTYPE_REG)
@@ -1763,9 +1710,6 @@ void DoubleClickProc(int Win, int Mode, int App)
 {
 	int Pos;
 	int Type;
-	char Local[FMAX_PATH+1];
-	char Tmp[FMAX_PATH+1];
-	int UseDiffViewer;
 
 	if (!AskUserOpeDisabled())
 	{
@@ -1774,7 +1718,7 @@ void DoubleClickProc(int Win, int Mode, int App)
 		{
 			if((Pos = GetFirstSelected(Win, NO)) != -1)
 			{
-				GetNodeName(Win, Pos, Tmp, FMAX_PATH);
+				auto Tmp = GetNodeName(Win, Pos);
 				Type = GetNodeType(Win, Pos);
 
 				if(Win == WIN_LOCAL)
@@ -1784,10 +1728,7 @@ void DoubleClickProc(int Win, int Mode, int App)
 					if((App != -1) || (Type == NODE_FILE) || (Mode == YES))
 					{
 						if((DclickOpen == YES) || (Mode == YES))
-						{
-							strcpy(Local, (AskLocalCurDir() / fs::u8path(Tmp)).u8string().c_str());
-							ExecViewer(Local, App);
-						}
+							ExecViewer(AskLocalCurDir() / Tmp, App);
 						else
 							PostMessageW(GetMainHwnd(), WM_COMMAND, MAKEWPARAM(MENU_UPLOAD, 0), 0);
 					}
@@ -1801,39 +1742,20 @@ void DoubleClickProc(int Win, int Mode, int App)
 						if((DclickOpen == YES) || (Mode == YES))
 						{
 							// ビューワ２、３のパスが "d " で始まっていたら差分ビューア使用
-							if ((App == 1 || App == 2) && strncmp(ViewerName[App], "d ", 2) == 0)
-								UseDiffViewer = YES;
-							else
-								UseDiffViewer = NO;
+							auto UseDiffViewer = (App == 1 || App == 2) && ViewerName[App].starts_with(L"d "sv);
 
 							auto remoteDir = tempDirectory() / L"file";
 							fs::create_directory(remoteDir);
-							auto remotePath = (remoteDir / (UseDiffViewer == YES ? L"remote." + u8(Tmp) : u8(Tmp))).u8string();
+							auto remotePath = remoteDir / (UseDiffViewer ? L"remote." + Tmp : Tmp);
 
 							if(AskTransferNow() == YES)
 								SktShareProh();
 
 	//						MainTransPkt.ctrl_skt = AskCmdCtrlSkt();
-							strcpy(MainTransPkt.Cmd, "RETR ");
-							if(AskHostType() == HTYPE_ACOS)
-							{
-								strcpy(MainTransPkt.RemoteFile, "'");
-								strcat(MainTransPkt.RemoteFile, AskHostLsName().c_str());
-								strcat(MainTransPkt.RemoteFile, "(");
-								strcat(MainTransPkt.RemoteFile, Tmp);
-								strcat(MainTransPkt.RemoteFile, ")");
-								strcat(MainTransPkt.RemoteFile, "'");
-							}
-							else if(AskHostType() == HTYPE_ACOS_4)
-							{
-								strcpy(MainTransPkt.RemoteFile, Tmp);
-							}
-							else
-							{
-								strcpy(MainTransPkt.RemoteFile, Tmp);
-							}
-							strcpy(MainTransPkt.LocalFile, data(remotePath));
-							MainTransPkt.Type = AskTransferTypeAssoc(MainTransPkt.RemoteFile, AskTransferType());
+							MainTransPkt.Command = L"RETR "s;
+							MainTransPkt.Remote = AskHostType() == HTYPE_ACOS ? std::format(L"'{}({})'"sv, AskHostLsName(), Tmp) : Tmp;
+							MainTransPkt.Local = remotePath;
+							MainTransPkt.Type = AskTransferTypeAssoc(MainTransPkt.Remote, AskTransferType());
 							MainTransPkt.Size = 1;
 							MainTransPkt.KanjiCode = AskHostKanjiCode();
 							MainTransPkt.KanjiCodeDesired = AskLocalKanjiCode();
@@ -1851,17 +1773,16 @@ void DoubleClickProc(int Win, int Mode, int App)
 								CancelFlg = NO;
 								Sts = DoDownload(AskCmdCtrlSkt(), MainTransPkt, NO, &CancelFlg);
 								if (MarkAsInternet == YES && IsZoneIDLoaded() == YES)
-									MarkFileAsDownloadedFromInternet(data(remotePath));
+									MarkFileAsDownloadedFromInternet(remotePath);
 							}
 							EnableUserOpe();
 
-							AddTempFileList(data(remotePath));
+							AddTempFileList(remotePath);
 							if(Sts/100 == FTP_COMPLETE) {
-								if (UseDiffViewer == YES) {
-									strcpy(Local, (AskLocalCurDir() / fs::u8path(Tmp)).u8string().c_str());
-									ExecViewer2(Local, data(remotePath), App);
+								if (UseDiffViewer) {
+									ExecViewer2(AskLocalCurDir() / Tmp, remotePath, App);
 								} else {
-									ExecViewer(data(remotePath), App);
+									ExecViewer(remotePath, App);
 								}
 							}
 						}
@@ -1879,62 +1800,30 @@ void DoubleClickProc(int Win, int Mode, int App)
 }
 
 
-/*----- フォルダの移動 --------------------------------------------------------
-*
-*	Parameter
-*		int Win : ウインドウ番号 (WIN_xxx)
-*		char *Path : 移動先のパス名
-*
-*	Return Value
-*		なし
-*
-*	Note
-*		フォルダ同時移動の処理も行う
-*----------------------------------------------------------------------------*/
-
-static void ChangeDir(int Win, char *Path)
-{
-	int Sync;
-	char Remote[FMAX_PATH+1];
-
-	// 同時接続対応
+// フォルダの移動
+static void ChangeDir(int Win, std::wstring_view dir) {
 	CancelFlg = NO;
-
-	// デッドロック対策
 	DisableUserOpe();
-	Sync = AskSyncMoveMode();
-	if(Sync == YES)
-	{
-		if(strcmp(Path, "..") == 0)
-		{
-			strcpy(Remote, u8(AskRemoteCurDir()).c_str());
-			if (AskLocalCurDir().filename() != u8(GetFileName(Remote)))
-				Sync = NO;
-		}
-	}
-
-	if((Win == WIN_LOCAL) || (Sync == YES))
-	{
-		if(DoLocalCWD(Path) == FFFTP_SUCCESS)
+	int Sync = AskSyncMoveMode();
+	if (Sync == YES && dir == L".."sv && AskLocalCurDir().filename() != GetFileName(AskRemoteCurDir()))
+		Sync = NO;
+	if (Win == WIN_LOCAL || Sync == YES) {
+		if (DoLocalCWD(dir) == FFFTP_SUCCESS)
 			GetLocalDirForWnd();
 	}
-
-	if((Win == WIN_REMOTE) || (Sync == YES))
-	{
-		if(CheckClosedAndReconnect() == FFFTP_SUCCESS)
-		{
+	if (Win == WIN_REMOTE || Sync == YES) {
+		if (CheckClosedAndReconnect() == FFFTP_SUCCESS) {
+			std::wstring path{ dir };
 #if defined(HAVE_OPENVMS)
 			/* OpenVMSの場合、".DIR;?"を取る */
 			if (AskHostType() == HTYPE_VMS)
-				ReformVMSDirName(Path, TRUE);
+				path = ReformVMSDirName(std::move(path));
 #endif
-			if(DoCWD(Path, YES, NO, YES) < FTP_RETRY)
+			if (DoCWD(path, YES, NO, YES) < FTP_RETRY)
 				GetRemoteDirForWnd(CACHE_NORMAL, &CancelFlg);
 		}
 	}
-	// デッドロック対策
 	EnableUserOpe();
-	return;
 }
 
 
@@ -2017,6 +1906,9 @@ static void CalcWinSize(void)
 
 static void CheckResizeFrame(WPARAM Keys, int x, int y)
 {
+	static auto sizewe = LoadCursorW(0, IDC_SIZEWE);
+	static auto sizens = LoadCursorW(0, IDC_SIZENS);
+	static auto arrow = LoadCursorW(0, IDC_ARROW);
 	RECT Rect;
 	RECT Rect1;
 
@@ -2027,8 +1919,7 @@ static void CheckResizeFrame(WPARAM Keys, int x, int y)
 		{
 			/* 境界位置変更用カーソルに変更 */
 			SetCapture(GetMainHwnd());
-			hCursor = LoadCursor(GetFtpInst(), MAKEINTRESOURCE(resize_lr_csr));
-			SetCursor(hCursor);
+			SetCursor(sizewe);
 			Resizing = RESIZE_PREPARE;
 			ResizePos = RESIZE_HPOS;
 		}
@@ -2036,8 +1927,7 @@ static void CheckResizeFrame(WPARAM Keys, int x, int y)
 		{
 			/* 境界位置変更用カーソルに変更 */
 			SetCapture(GetMainHwnd());
-			hCursor = LoadCursor(GetFtpInst(), MAKEINTRESOURCE(resize_ud_csr));
-			SetCursor(hCursor);
+			SetCursor(sizens);
 			Resizing = RESIZE_PREPARE;
 			ResizePos = RESIZE_VPOS;
 		}
@@ -2066,8 +1956,7 @@ static void CheckResizeFrame(WPARAM Keys, int x, int y)
 			{
 				/* 元のカーソルに戻す */
 				ReleaseCapture();
-				hCursor = LoadCursor(NULL, IDC_ARROW);
-				SetCursor(hCursor);
+				SetCursor(arrow);
 				Resizing = RESIZE_OFF;
 			}
 		}
@@ -2089,8 +1978,7 @@ static void CheckResizeFrame(WPARAM Keys, int x, int y)
 			/* 境界位置変更終了 */
 			ReleaseCapture();
 			ClipCursor(NULL);
-			hCursor = LoadCursor(NULL, IDC_ARROW);
-			SetCursor(hCursor);
+			SetCursor(arrow);
 			Resizing = RESIZE_OFF;
 		}
 	}
@@ -2098,88 +1986,51 @@ static void CheckResizeFrame(WPARAM Keys, int x, int y)
 }
 
 
-/*----- ファイル一覧情報をビューワで表示 --------------------------------------
-*
-*	Parameter
-*		なし
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-static void DispDirInfo(void)
-{
-	char Buf[FMAX_PATH+1];
-
-	strcpy(Buf, MakeCacheFileName(0).u8string().c_str());
-	ExecViewer(Buf, 0);
-	return;
+// ファイル一覧情報をビューワで表示
+static void DispDirInfo() {
+	ExecViewer(MakeCacheFileName(0), 0);
 }
 
 
 // ビューワを起動
-void ExecViewer(char *Fname, int App) {
+void ExecViewer(fs::path const& path, int App) {
 	/* FindExecutable()は関連付けられたプログラムのパス名にスペースが	*/
 	/* 含まれている時、間違ったパス名を返す事がある。					*/
 	/* そこで、関連付けられたプログラムの起動はShellExecute()を使う。	*/
-	char ComLine[FMAX_PATH * 2 + 3 + 1];
-	auto pFname = fs::u8path(Fname);
-	if (wchar_t result[MAX_PATH]; App == -1 && pFname.has_extension() && FindExecutableW(pFname.c_str(), nullptr, result) > (HINSTANCE)32) {
+	if (wchar_t result[MAX_PATH]; App == -1 && path.has_extension() && FindExecutableW(path.c_str(), nullptr, result) > (HINSTANCE)32) {
 		// 拡張子があるので関連付けを実行する
-		DoPrintf("ShellExecute - %s", Fname);
-		ShellExecuteW(0, L"open", pFname.c_str(), nullptr, AskLocalCurDir().c_str(), SW_SHOW);
-	} else if (App == -1 && (GetFileAttributesW(pFname.c_str()) & FILE_ATTRIBUTE_DIRECTORY)) {
+		Debug(L"ShellExecute - {}"sv, path.native());
+		ShellExecuteW(0, L"open", path.c_str(), nullptr, AskLocalCurDir().c_str(), SW_SHOW);
+	} else if (App == -1 && (GetFileAttributesW(path.c_str()) & FILE_ATTRIBUTE_DIRECTORY)) {
 		// ディレクトリなのでフォルダを開く
-		MakeDistinguishableFileName(ComLine, Fname);
-		DoPrintf("ShellExecute - %s", Fname);
-		ShellExecuteW(0, L"open", u8(ComLine).c_str(), nullptr, pFname.c_str(), SW_SHOW);
+		auto wComLine = MakeDistinguishableFileName(fs::path{ path });
+		Debug(L"ShellExecute - {}"sv, path.native());
+		ShellExecuteW(0, L"open", wComLine.c_str(), nullptr, path.c_str(), SW_SHOW);
 	} else {
-		sprintf(ComLine, "%s \"%s\"", ViewerName[App == -1 ? 0 : App], Fname);
-		DoPrintf("CreateProcess - %s", ComLine);
+		auto commandLine = std::format(LR"({} "{}")"sv, ViewerName[App == -1 ? 0 : App], path.native());
+		Debug(L"CreateProcess - {}"sv, commandLine);
 		STARTUPINFOW si{ sizeof(STARTUPINFOW), nullptr, nullptr, nullptr, 0, 0, 0, 0, 0, 0, 0, 0, SW_SHOWNORMAL };
-		auto wComLine = u8(ComLine);
-		if (ProcessInformation pi; !CreateProcessW(nullptr, data(wComLine), nullptr, nullptr, false, 0, nullptr, systemDirectory().c_str(), &si, &pi)) {
-			SetTaskMsg(MSGJPN182, GetLastError());
-			SetTaskMsg(">>%s", ComLine);
+		if (ProcessInformation pi; !CreateProcessW(nullptr, data(commandLine), nullptr, nullptr, false, 0, nullptr, systemDirectory().c_str(), &si, &pi)) {
+			SetTaskMsg(IDS_MSGJPN182, GetLastError());
+			SetTaskMsg(">>%s", u8(commandLine).c_str());
 		}
 	}
 }
 
 
-/*----- 差分表示ビューワを起動 ------------------------------------------------
-*
-*	Parameter
-*		char Fname1 : ファイル名
-*		char Fname2 : ファイル名2
-*		int App : アプリケーション番号（2 or 3）
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-void ExecViewer2(char *Fname1, char *Fname2, int App)
-{
-	char AssocProg[FMAX_PATH+1];
-	char ComLine[FMAX_PATH*2+3+1];
-
+// 差分表示ビューワを起動
+void ExecViewer2(fs::path const& path1, fs::path const& path2, int App) {
 	/* FindExecutable()は関連付けられたプログラムのパス名にスペースが	*/
 	/* 含まれている時、間違ったパス名を返す事がある。					*/
 	/* そこで、関連付けられたプログラムの起動はShellExecute()を使う。	*/
-
-	strcpy(AssocProg, ViewerName[App] + 2);	/* 先頭の "d " は読み飛ばす */
-
-	if(strchr(Fname1, ' ') == NULL && strchr(Fname2, ' ') == NULL)
-		sprintf(ComLine, "%s %s %s", AssocProg, Fname1, Fname2);
-	else
-		sprintf(ComLine, "%s \"%s\" \"%s\"", AssocProg, Fname1, Fname2);
-
-	DoPrintf("FindExecutable - %s", ComLine);
-
+	auto format = path1.native().find(L' ') == std::wstring::npos && path2.native().find(L' ') == std::wstring::npos ? LR"({} {} {})"sv : LR"({} "{}" "{}")"sv;
+	auto const executable = std::wstring_view{ ViewerName[App] }.substr(2);		/* 先頭の "d " は読み飛ばす */
+	auto commandLine = std::format(format, executable, path1.native(), path2.native());
+	Debug(L"FindExecutable - {}"sv, commandLine);
 	STARTUPINFOW si{ sizeof(STARTUPINFOW), nullptr, nullptr, nullptr, 0, 0, 0, 0, 0, 0, 0, 0, SW_SHOWNORMAL };
-	auto wComLine = u8(ComLine);
-	if (ProcessInformation pi; !CreateProcessW(nullptr, data(wComLine), nullptr, nullptr, false, 0, nullptr, systemDirectory().c_str(), &si, &pi)) {
-		SetTaskMsg(MSGJPN182, GetLastError());
-		SetTaskMsg(">>%s", ComLine);
+	if (ProcessInformation pi; !CreateProcessW(nullptr, data(commandLine), nullptr, nullptr, false, 0, nullptr, systemDirectory().c_str(), &si, &pi)) {
+		SetTaskMsg(IDS_MSGJPN182, GetLastError());
+		SetTaskMsg(">>%s", u8(commandLine).c_str());
 	}
 }
 
@@ -2217,13 +2068,6 @@ static void AboutDialog(HWND hWnd) {
 		}
 	};
 	Dialog(GetFtpInst(), about_dlg, hWnd, About{});
-}
-
-
-// サウンドを鳴らす
-void SoundPlay(int Num) {
-	if (Sound[Num].On == YES)
-		sndPlaySoundW(u8(Sound[Num].Fname).c_str(), SND_ASYNC | SND_NODEFAULT);
 }
 
 
@@ -2326,54 +2170,36 @@ int AskAutoExit(void)
 	return(AutoExit);
 }
 
-/*----- ユーザにパスワードを入力させ，それを設定する -----------------------
-*
-*	Parameter
-*		なし
-*
-*	Return Value
-*		int : 0/ユーザキャンセル, 1/設定した, 2/デフォルト設定
-*----------------------------------------------------------------------------*/
-int EnterMasterPasswordAndSet(bool newpassword, HWND hWnd)
-{
-	char buf[MAX_PASSWORD_LEN + 1];
-	// パスワードの入力欄を非表示
-	// 非表示にしたため新しいパスワードを2回入力させる
-	char buf1[MAX_PASSWORD_LEN + 1];
-	char *p;
-
-	buf[0] = NUL;
-	if (InputDialog(newpassword ? newmasterpasswd_dlg : masterpasswd_dlg, hWnd, NULL, buf, MAX_PASSWORD_LEN + 1, nullptr, IDH_HELP_TOPIC_0000064)){
-		// パスワードの入力欄を非表示
-		if (newpassword)
-		{
-			buf1[0] = NUL;
-			if (!InputDialog(newmasterpasswd_dlg, hWnd, NULL, buf1, MAX_PASSWORD_LEN + 1, nullptr, IDH_HELP_TOPIC_0000064)){
-				return 0;
-			}
-			if(strcmp(buf, buf1) != 0)
-			{
-				Message(hWnd, IDS_PASSWORD_ISNOT_IDENTICAL, MB_OK | MB_ICONERROR);
-				return 0;
-			}
-		}
-		/* 末尾の空白を削除 */
-		RemoveTailingSpaces(buf);
-		/* 先頭の空白を削除 */
-		for( p = buf; *p == ' '; p++ )
-			;
-		
-		if( p[0] != NUL ){
-			SetMasterPassword( p );
-			return 1;
-		}
-		else {
-			/* 空の場合はデフォルト値を設定 */
-			SetMasterPassword( NULL );
-			return 2;
+// ユーザにパスワードを入力させ，それを設定する
+//   0/ユーザキャンセル, 1/設定した, 2/デフォルト設定
+int EnterMasterPasswordAndSet(bool newpassword, HWND hWnd) {
+	std::wstring pass1;
+	if (!InputDialog(newpassword ? newmasterpasswd_dlg : masterpasswd_dlg, hWnd, 0, pass1, MAX_PASSWORD_LEN + 1, nullptr, IDH_HELP_TOPIC_0000064))
+		return 0;
+	if (newpassword) {
+		// 新しいパスワードを2回入力させる
+		if (std::wstring pass2; !InputDialog(newmasterpasswd_dlg, hWnd, 0, pass2, MAX_PASSWORD_LEN + 1, nullptr, IDH_HELP_TOPIC_0000064))
+			return 0;
+		else if (pass1 != pass2) {
+			Message(hWnd, IDS_PASSWORD_ISNOT_IDENTICAL, MB_OK | MB_ICONERROR);
+			return 0;
 		}
 	}
-	return 0;
+
+	/* 末尾の空白を削除 */
+	if (auto pos = pass1.find_last_not_of(L' '); pos != std::wstring::npos && pos + 1 != size(pass1))
+		pass1.erase(pos + 1);
+	/* 先頭の空白を削除 */
+	if (auto pos = pass1.find_first_not_of(L' '); pos != std::wstring::npos && pos != 0)
+		pass1.erase(0, pos);
+
+	if (empty(pass1)) {
+		/* 空の場合はデフォルト値を設定 */
+		SetMasterPassword();
+		return 2;
+	}
+	SetMasterPassword(pass1);
+	return 1;
 }
 
 // マルチコアCPUの特定環境下でファイル通信中にクラッシュするバグ対策
@@ -2425,4 +2251,8 @@ void UpdateTaskbarProgress() {
 int AskToolWinHeight(void)
 {
 	return(ToolWinHeight);
+}
+
+int MainThreadRunner::Run() {
+	return IsMainThread() ? DoWork() : (int)SendMessageW(GetMainHwnd(), WM_MAINTHREADRUNNER, 0, (LPARAM)this);
 }

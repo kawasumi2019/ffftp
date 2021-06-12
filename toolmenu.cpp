@@ -33,11 +33,11 @@ extern int SepaWidth;
 extern int RemoteWidth;
 extern int CancelFlg;
 extern int DotFile;
-extern char AsciiExt[ASCII_EXT_LEN+1];
+std::vector<std::wstring> AsciiExt = { L"*.txt"s, L"*.html"s, L"*.htm"s, L"*.cgi"s, L"*.pl"s, L"*.js"s, L"*.vbs"s, L"*.css"s, L"*.rss"s, L"*.rdf"s, L"*.xml"s, L"*.xhtml"s, L"*.xht"s, L"*.shtml"s, L"*.shtm"s, L"*.sh"s, L"*.py"s, L"*.rb"s, L"*.properties"s, L"*.sql"s, L"*.asp"s, L"*.aspx"s, L"*.php"s, L"*.htaccess"s };
 extern int TransMode;
 extern int ListType;
 extern int LocalWidth;
-extern char ViewerName[VIEWERS][FMAX_PATH+1];
+extern std::wstring ViewerName[VIEWERS];
 extern int TransMode;
 extern int SortSave;
 extern int LocalKanjiCode;
@@ -173,11 +173,11 @@ static LRESULT CALLBACK HistoryEdit(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM 
 		switch (wParam) {
 		case 0x0D:			/* リターンキーが押された */
 			if (isLocal) {
-				DoLocalCWD(u8(GetText(hWnd)).c_str());
+				DoLocalCWD(GetText(hWnd));
 				GetLocalDirForWnd();
 			} else {
 				CancelFlg = NO;
-				if (CheckClosedAndReconnect() == FFFTP_SUCCESS && DoCWD(u8(GetText(hWnd)).c_str(), YES, NO, YES) < FTP_RETRY)
+				if (CheckClosedAndReconnect() == FFFTP_SUCCESS && DoCWD(GetText(hWnd), YES, NO, YES) < FTP_RETRY)
 					GetRemoteDirForWnd(CACHE_NORMAL, &CancelFlg);
 			}
 			return 0;
@@ -471,15 +471,13 @@ int AskTransferType() {
 
 
 // 実際の転送モードを返す
-int AskTransferTypeAssoc(char* Fname, int Type) {
+int AskTransferTypeAssoc(std::wstring_view path, int Type) {
 	if (Type != TYPE_X)
 		return Type;
-	if (0 < StrMultiLen(AsciiExt)) {
-		auto wName = u8(GetFileName(Fname));
-		for (char* Pos = AsciiExt; *Pos != NUL; Pos += strlen(Pos) + 1)
-			if (CheckFname(wName, u8(Pos)))
+	if (!empty(AsciiExt))
+		for (std::wstring file{ GetFileName(path) }; auto const& spec : AsciiExt)
+			if (CheckFname(file, spec))
 				return TYPE_A;
-	}
 	return TYPE_I;
 }
 
@@ -816,10 +814,10 @@ void ShowPopupMenu(int Win, int Pos) {
 	EnableMenuItem(submenu, MENU_OPEN, canOpen ? 0 : MF_GRAYED);
 	constexpr UINT MenuID[VIEWERS] = { MENU_OPEN1, MENU_OPEN2, MENU_OPEN3 };
 	for (int i = VIEWERS - 1; i >= 0; i--) {
-		if (strlen(ViewerName[i]) != 0) {
+		if (!empty(ViewerName[i])) {
 			static auto const format = GetString(IDS_OPEN_WITH);
 			wchar_t text[FMAX_PATH + 1];
-			swprintf_s(text, format.c_str(), fs::u8path(ViewerName[i]).filename().c_str(), i + 1);
+			swprintf_s(text, format.c_str(), fs::path{ ViewerName[i] }.filename().c_str(), i + 1);
 			MENUITEMINFOW mii{ sizeof(MENUITEMINFOW), MIIM_FTYPE | MIIM_STATE | MIIM_ID | MIIM_STRING, MFT_STRING, UINT(canOpen ? 0 : MFS_GRAYED), MenuID[i] };
 			mii.dwTypeData = text;
 			InsertMenuItemW(submenu, 1, true, &mii);

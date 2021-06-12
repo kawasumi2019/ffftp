@@ -32,12 +32,14 @@
 #define _WINSOCK_DEPRECATED_NO_WARNINGS
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
-#define _WINNLS_									// avoid include winnls.h
+#define UMDF_USING_NTSTATUS
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <charconv>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <forward_list>
 #include <fstream>
 #include <future>
@@ -46,6 +48,7 @@
 #include <mutex>
 #include <numeric>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -63,15 +66,8 @@
 #include <stdlib.h>
 #include <time.h>
 #include <Windows.h>
-#pragma push_macro("WINVER")
-#undef _WINNLS_
-#if WINVER < 0x0600
-#undef WINVER
-#define WINVER 0x0600			// fake WINVER to load Windows API Normalization Functions.
-#endif
-#include <WinNls.h>
-#pragma pop_macro("WINVER")
 #include <ObjBase.h>			// for COM interface, define `interface` macro.
+#include <bcrypt.h>
 #include <windowsx.h>
 #include <winsock2.h>
 #include <CommCtrl.h>
@@ -79,30 +75,25 @@
 #include <MLang.h>
 #include <MMSystem.h>
 #include <mstcpip.h>
+#include <ntstatus.h>
 #include <shellapi.h>
 #include <ShlObj.h>
 #include <Shlwapi.h>
 #include <ShObjIdl.h>
-#include <WinCrypt.h>
 #include <WS2tcpip.h>
-#include "wrl/client.h"
-#include "wrl/implements.h"
-#include <comutil.h>
+#include <wrl/client.h>
+#include <wrl/implements.h>
+#include <comdef.h>
 #include "config.h"
 #include "dialog.h"
 #include "helpid.h"
 #include "Resource/resource.ja-JP.h"
-#include "mesg-jpn.h"
-// IdnToAscii()、NormalizeString()共にVistaからNormaliz.dllからKERNEL32.dllに移されている。
-// この影響かのためかNormalizeString()だけはkernel32.libにも登録されている（多分バグ）。
-// このため、XP向けに正しくリンクするためにはリンカー引数でkernel32.libよりも前にnormaliz.libを置く必要がある。
-// #pragma comment(lib, "normaliz.lib") ではこれを実現できないため、リンクオプションで設定する。
-// 逆にIdnToAscii()はkernel32.libに登録されていないため、Vista以降をターゲットとする場合でもnormaliz.libは必要となる。
+#pragma comment(lib, "bcrypt.lib")
 #pragma comment(lib, "Comctl32.lib")
+#pragma comment(lib, "normaliz.lib")
 #pragma comment(lib, "Shlwapi.lib")
 #pragma comment(lib, "Winmm.lib")
 #pragma comment(lib, "Ws2_32.lib")
-#pragma comment(lib, "comsuppw.lib")
 namespace fs = std::filesystem;
 using namespace std::literals;
 template<class T>
@@ -113,13 +104,12 @@ constexpr bool false_v = false;
 enum class FileType : UINT {
 	All = IDS_FILETYPE_ALL,
 	Executable = IDS_FILETYPE_EXECUTABLE,
-	Audio = IDS_FILETYPE_AUDIO,
 	Reg = IDS_FILETYPE_REG,
 	Ini = IDS_FILETYPE_INI,
 	Xml = IDS_FILETYPE_XML,
 };
 
-constexpr FileType AllFileTyes[]{ FileType::All, FileType::Executable, FileType::Audio, FileType::Reg, FileType::Ini, FileType::Xml, };
+constexpr FileType AllFileTyes[]{ FileType::All, FileType::Executable, FileType::Reg, FileType::Ini, FileType::Xml, };
 
 
 #define NUL				'\0'
@@ -139,9 +129,9 @@ constexpr FileType AllFileTyes[]{ FileType::All, FileType::Executable, FileType:
 /*===== バージョン ======*/
 
 #ifdef _WIN64
-#define VER_STR					"4.7 64bit"
+#define VER_STR					"5.1 64bit"
 #else
-#define VER_STR					"4.7 32bit"
+#define VER_STR					"5.1 32bit"
 #endif
 #define VER_NUM					2000		/* 設定バージョン */
 
@@ -154,16 +144,8 @@ constexpr FileType AllFileTyes[]{ FileType::All, FileType::Executable, FileType:
 
 #define WM_REFRESH_LOCAL_FLG	(WM_USER+7)
 #define WM_REFRESH_REMOTE_FLG	(WM_USER+8)
-
-// UPnP対応
-#define WM_ADDPORTMAPPING	(WM_USER+9)
-#define WM_REMOVEPORTMAPPING	(WM_USER+10)
-
-// 同時接続対応
 #define WM_RECONNECTSOCKET	(WM_USER+11)
-
-// ゾーンID設定追加
-#define WM_MARKFILEASDOWNLOADEDFROMINTERNET	(WM_USER+12)
+#define WM_MAINTHREADRUNNER	(WM_USER+13)
 
 /*===== ホスト番号 =====*/
 /* ホスト番号は 0～ の値を取る */
@@ -178,30 +160,18 @@ constexpr FileType AllFileTyes[]{ FileType::All, FileType::Executable, FileType:
 #define PASSWORD_LEN	80		/* パスワード */
 #define ACCOUNT_LEN		80		/* アカウント */
 #define INIT_DIR_LEN	(FMAX_PATH-40)	/* 初期ディレクトリ */
-#define USER_MAIL_LEN	80		/* ユーザのメールアドレス */
-								/*   PASSWORD_LEN と同じにすること */
-#define ASCII_EXT_LEN	400		/* アスキーモード転送のファイル名列 */
 #define FILTER_EXT_LEN	400		/* フィルタのファイル名列 */
 #define BOOKMARK_SIZE	2048	/* ブックマーク */
 #define CHMOD_CMD_LEN	40		/* 属性変更コマンド */
-#define MIRROR_LEN		400		/* ミラーリングの設定用 */
 #define NLST_NAME_LEN	40		/* NLSTに付けるファイル名／オプション */
-#define DEFATTRLIST_LEN	800		/* 属性リストの長さ */
 #define INITCMD_LEN		256		/* 初期化コマンド */
 #define OWNER_NAME_LEN	40		/* オーナ名 */
 #define RAS_NAME_LEN	256		/* RASのエントリ名の長さ */
 
 #define FMAX_PATH		1024
 
-#define ONELINE_BUF_SIZE	(10*1024)
-
-// 暗号化通信対応
-#define PRIVATE_KEY_LEN 4096
-
 /*===== 初期値 =====*/
 
-#define CHMOD_CMD_NOR	"SITE CHMOD"	/* 属性変更コマンド */
-#define LS_FNAME		"-alL"			/* NLSTに付けるもの */
 #if defined(HAVE_TANDEM)
 #define DEF_PRIEXT		4				/* Primary Extents の初期値 */
 #define DEF_SECEXT		28				/* Secondary Extents の初期値 */
@@ -335,14 +305,6 @@ constexpr FileType AllFileTyes[]{ FileType::All, FileType::Executable, FileType:
 // UTF-8対応
 #define KANJI_AUTO		-1
 
-/*===== サウンド =====*/
-
-#define SND_CONNECT		0		/* 接続時のサウンド */
-#define SND_TRANS		1		/* 転送終了時のサウンド */
-#define SND_ERROR		2		/* エラー時のサウンド */
-
-#define SOUND_TYPES		3		/* サウンドの種類 */
-
 /*===== ビューワ =====*/
 
 #define VIEWERS			3		/* ビューワの数 */
@@ -469,19 +431,21 @@ constexpr FileType AllFileTyes[]{ FileType::All, FileType::Executable, FileType:
 
 
 struct HostExeptPassword {
+	static inline auto DefaultChmod = L"SITE CHMOD"s;	/* 属性変更コマンド */
+	static inline auto DefaultLsOption = L"-alL"s;		/* NLSTに付けるもの */
 	static inline int DefaultTimeZone = [] {
 		TIME_ZONE_INFORMATION tzi;
 		GetTimeZoneInformation(&tzi);
 		return tzi.Bias / -60;
 	}();
-	char HostAdrs[HOST_ADRS_LEN + 1] = "";				/* ホスト名 */
-	char UserName[USER_NAME_LEN + 1] = "";				/* ユーザ名 */
-	char Account[ACCOUNT_LEN + 1] = "";					/* アカウント */
-	char LocalInitDir[INIT_DIR_LEN + 1];				/* ローカルの開始ディレクトリ */
-	char RemoteInitDir[INIT_DIR_LEN + 1] = "";			/* ホストの開始ディレクトリ */
-	char ChmodCmd[CHMOD_CMD_LEN + 1] = CHMOD_CMD_NOR;	/* 属性変更コマンド */
-	char LsName[NLST_NAME_LEN + 1] = LS_FNAME;			/* NLSTに付けるファイル名/オプション*/
-	char InitCmd[INITCMD_LEN + 1] = "";					/* ホストの初期化コマンド */
+	std::wstring HostAdrs;								/* ホスト名 */
+	std::wstring UserName;								/* ユーザ名 */
+	std::wstring Account;								/* アカウント */
+	std::wstring LocalInitDir;							/* ローカルの開始ディレクトリ */
+	std::wstring RemoteInitDir;							/* ホストの開始ディレクトリ */
+	std::wstring ChmodCmd = DefaultChmod;				/* 属性変更コマンド */
+	std::wstring LsName = DefaultLsOption;				/* NLSTに付けるファイル名/オプション*/
+	std::wstring InitCmd;								/* ホストの初期化コマンド */
 	int Port = IPPORT_FTP;								/* ポート番号 */
 	int KanjiCode = KANJI_NOCNV;						/* ホストの漢字コード (KANJI_xxx) */
 	int KanaCnv = YES;									/* 半角カナを全角に変換(YES/NO) */
@@ -500,12 +464,11 @@ struct HostExeptPassword {
 	int Dialup = NO;									/* ダイアルアップ接続するかどうか (YES/NO) */
 	int DialupAlways = NO;								/* 常にこのエントリへ接続するかどうか (YES/NO) */
 	int DialupNotify = YES;								/* 再接続の際に確認する (YES/NO) */
-	char DialEntry[RAS_NAME_LEN + 1] = "";				/* ダイアルアップエントリ */
+	std::wstring DialEntry;								/* ダイアルアップエントリ */
 	int UseNoEncryption = YES;							/* 暗号化なしで接続する (YES/NO) */
 	int UseFTPES = YES;									/* FTPESで接続する (YES/NO) */
 	int UseFTPIS = YES;									/* FTPISで接続する (YES/NO) */
 	int UseSFTP = YES;									/* SFTPで接続する (YES/NO) */
-	char PrivateKey[PRIVATE_KEY_LEN + 1] = "";			/* テキスト形式の秘密鍵 */
 	int MaxThreadCount = 1;								/* 同時接続数 */
 	int ReuseCmdSkt = YES;								/* メインウィンドウのソケットを再利用する (YES/NO) */
 	int UseMLSD = YES;									/* "MLSD"コマンドを使用する */
@@ -514,17 +477,14 @@ struct HostExeptPassword {
 	int TransferErrorNotify = YES;						/* 転送エラー時に確認ダイアログを出すかどうか (YES/NO) */
 	int TransferErrorReconnect = YES;					/* 転送エラー時に再接続する (YES/NO) */
 	int NoPasvAdrs = NO;								/* PASVで返されるアドレスを無視する (YES/NO) */
-	HostExeptPassword();
+	inline HostExeptPassword();
 };
 
 struct Host : HostExeptPassword {
-	char PassWord[PASSWORD_LEN+1] = "";		/* パスワード */
+	std::wstring PassWord;
 	Host() = default;
 	Host(Host const&) = default;
-	Host(Host const& that, bool includePassword) : HostExeptPassword{ that } {
-		if (includePassword)
-			strcpy(PassWord, that.PassWord);
-	}
+	Host(Host const& that, bool includePassword) : HostExeptPassword{ that }, PassWord{ includePassword ? that.PassWord : L""s } {}
 };
 
 
@@ -532,8 +492,8 @@ struct HOSTDATA : Host {
 	int Level = 0;							/* 設定のレベル */
 											/* 通常はグループのフラグのみが有効 */
 											/* レベル数は設定の登録／呼出時のみで使用 */
-	char HostName[HOST_NAME_LEN+1] = "";	/* 設定名 */
-	char BookMark[BOOKMARK_SIZE] = "";		/* ブックマーク */
+	std::wstring HostName;					/* 設定名 */
+	std::vector<std::wstring> BookMark;		/* ブックマーク */
 	int Anonymous = NO;						/* Anonymousフラグ */
 	int CurNameKanjiCode = KANJI_NOCNV;		/* 自動判別後のファイル名の漢字コード (KANJI_xxx) */
 	int LastDir = NO;						/* 最後にアクセスしたフォルダを保存 */
@@ -555,93 +515,83 @@ struct HISTORYDATA : Host {
 
 
 struct TRANSPACKET {
-	SOCKET ctrl_skt;				/* Socket */
-	char Cmd[40];					/* STOR/RETR/MKD */
-	char RemoteFile[FMAX_PATH+1];	/* ホスト側のファイル名（フルパス） */
-									/* VMSの時は ddd[xxx.yyy]/yyy/zzz のように */
-									/* なってるので注意 */
-	char LocalFile[FMAX_PATH+1];	/* ローカル側のファイル名（フルパス） */
-	int Type;						/* 転送方法 (TYPE_xx) */
-	LONGLONG Size;					/* ファイルのサイズ */
-	LONGLONG ExistSize;				/* すでに存在するファイルのサイズ */
-									/* 転送中は、転送したファイルのサイズを格納する */
-	FILETIME Time;					/* ファイルの時間(UTC) */
-	int Attr;						/* ファイルの属性 */
-	int KanjiCode;					/* 漢字コード (KANJI_xxx) */
-	int KanjiCodeDesired;			/* ローカルの漢字コード (KANJI_xxx) */
-	int KanaCnv;					/* 半角カナを全角に変換(YES/NO) */
-	int Mode;						/* 転送モード (EXIST_xxx) */
+	SOCKET ctrl_skt = INVALID_SOCKET;	/* Socket */
+	std::wstring Command;				/* STOR/RETR/MKD */
+	std::wstring Remote;				/* ホスト側のファイル名（フルパス） */
+										/* VMSの時は ddd[xxx.yyy]/yyy/zzz のように */
+										/* なってるので注意 */
+	fs::path Local;						/* ローカル側のファイル名（フルパス） */
+	int Type = 0;						/* 転送方法 (TYPE_xx) */
+	LONGLONG Size = 0;					/* ファイルのサイズ */
+	LONGLONG ExistSize = 0;				/* すでに存在するファイルのサイズ */
+										/* 転送中は、転送したファイルのサイズを格納する */
+	FILETIME Time = {};					/* ファイルの時間(UTC) */
+	int Attr = 0;						/* ファイルの属性 */
+	int KanjiCode = 0;					/* 漢字コード (KANJI_xxx) */
+	int KanjiCodeDesired = 0;			/* ローカルの漢字コード (KANJI_xxx) */
+	int KanaCnv = 0;					/* 半角カナを全角に変換(YES/NO) */
+	int Mode = 0;						/* 転送モード (EXIST_xxx) */
 #if defined(HAVE_TANDEM)
-	int FileCode;					/* ファイルコード */
-	int PriExt;						/* Primary Extents */
-	int SecExt;						/* Secondary Extents */
-	int MaxExt;						/* Max Extents */
+	int FileCode = 0;					/* ファイルコード */
+	int PriExt = 0;						/* Primary Extents */
+	int SecExt = 0;						/* Secondary Extents */
+	int MaxExt = 0;						/* Max Extents */
 #endif
-	HWND hWndTrans;					/* 転送中ダイアログのウインドウハンドル */
-	int Abort;						/* 転送中止フラグ (ABORT_xxx) */
-	int NoTransfer;
-	int ThreadCount;
+	HWND hWndTrans = nullptr;			/* 転送中ダイアログのウインドウハンドル */
+	int Abort = 0;						/* 転送中止フラグ (ABORT_xxx) */
+	int NoTransfer = 0;
+	int ThreadCount = 0;
 };
 
 
 /*===== ファイルリスト =====*/
 
-typedef struct filelist {
-	char File[FMAX_PATH + 1] = {};			/* ファイル名 */
-	char Node = 0;							/* 種類 (NODE_xxx) */
-	char Link = 0;							/* リンクファイルかどうか (YES/NO) */
-	LONGLONG Size = 0;						/* ファイルサイズ */
-	int Attr = 0;							/* 属性 */
-	FILETIME Time = {};						/* 時間(UTC) */
-	char Owner[OWNER_NAME_LEN + 1] = {};	/* オーナ名 */
-	char InfoExist = 0;						/* ファイル一覧に存在した情報のフラグ (FINFO_xxx) */
-	int ImageId = 0;						/* アイコン画像番号 */
-	filelist() = default;
-	filelist(const char* file, char node) : Node{ node } {
-		strcpy(File, file);
+struct FILELIST {
+	std::string Original;
+	std::wstring Name;
+	char Node = 0;			/* 種類 (NODE_xxx) */
+	char Link = 0;			/* リンクファイルかどうか (YES/NO) */
+	LONGLONG Size = 0;		/* ファイルサイズ */
+	int Attr = 0;			/* 属性 */
+	FILETIME Time = {};		/* 時間(UTC) */
+	std::wstring Owner;		/* オーナ名 */
+	char InfoExist = 0;		/* ファイル一覧に存在した情報のフラグ (FINFO_xxx) */
+	int ImageId = 0;		/* アイコン画像番号 */
+	FILELIST() = default;
+	FILELIST(std::wstring_view name, char node) : Name{ name }, Node{ node } {}
+	FILELIST(std::string_view original, char node) : Original{ original }, Node{ node } {}
+	FILELIST(std::wstring_view name, char node, char link, int64_t size, int attr, FILETIME time, char infoExist) : Name{ name }, Node{ node }, Link{ link }, Size{ size }, Attr{ attr }, Time{ time }, InfoExist{ infoExist } {}
+	inline FILELIST(std::string_view original, char node, char link, int64_t size, int attr, FILETIME time, std::string_view owner, char infoExist);
+	// ディレクトリの階層数を返す
+	//  単に '\' と '/'の数を返すだけ
+	int DirLevel() const {
+		return (int)std::ranges::count_if(Name, [](auto ch) { return ch == L'/' || ch == L'\\'; });
 	}
-	filelist(const char* file, char node, char link, LONGLONG size, int attr, FILETIME time, char infoExist) : Node{ node }, Link{ link }, Size{ size }, Attr{ attr }, Time{ time }, InfoExist{ infoExist } {
-		strcpy(File, file);
-	}
-	filelist(const char* file, char node, char link, LONGLONG size, int attr, FILETIME time, const char* owner, char infoExist) : Node{ node }, Link{ link }, Size{ size }, Attr{ attr }, Time{ time }, InfoExist{ infoExist } {
-		strcpy(File, file);
-		strcpy(Owner, owner);
-	}
-} FILELIST;
+};
 
 
-/*===== サウンドファイル =====*/
+class Sound {
+	const wchar_t* keyName;
+	const wchar_t* name;
+	int id;
+	Sound(const wchar_t* keyName, const wchar_t* name, int id) : keyName{ keyName }, name{ name }, id{ id } {}
+public:
+	static Sound Connected;
+	static Sound Transferred;
+	static Sound Error;
+	void Play(){ PlaySoundW(keyName, 0, SND_ASYNC | SND_NODEFAULT | SND_APPLICATION); }
+	static void Register();
+};
 
-typedef struct {
-	int On;						/* ON/OFFスイッチ */
-	char Fname[FMAX_PATH+1];		/* ファイル名 */
-} SOUNDFILE;
 
+class MainThreadRunner {
+protected:
+	~MainThreadRunner() = default;
+	virtual int DoWork() = 0;
+public:
+	int Run();
+};
 
-// UPnP対応
-typedef struct
-{
-	int r;
-	HANDLE h;
-	const char* Adrs;
-	int Port;
-	char* ExtAdrs;
-} ADDPORTMAPPINGDATA;
-
-typedef struct
-{
-	int r;
-	HANDLE h;
-	int Port;
-} REMOVEPORTMAPPINGDATA;
-
-// ゾーンID設定追加
-typedef struct
-{
-	int r;
-	HANDLE h;
-	char* Fname;
-} MARKFILEASDOWNLOADEDFROMINTERNETDATA;
 
 /*=================================================
 *		プロトタイプ
@@ -649,7 +599,8 @@ typedef struct
 
 /*===== main.c =====*/
 
-fs::path systemDirectory();
+fs::path const& systemDirectory();
+fs::path const& moduleDirectory();
 fs::path const& tempDirectory();
 void DispWindowTitle();
 HWND GetMainHwnd(void);
@@ -657,8 +608,8 @@ HWND GetFocusHwnd(void);
 void SetFocusHwnd(HWND hWnd);
 HINSTANCE GetFtpInst(void);
 void DoubleClickProc(int Win, int Mode, int App);
-void ExecViewer(char *Fname, int App);
-void ExecViewer2(char *Fname1, char *Fname2, int App);
+void ExecViewer(fs::path const& path, int App);
+void ExecViewer2(fs::path const& path1, fs::path const& path2, int App);
 void AddTempFileList(fs::path const& file);
 void SoundPlay(int Num);
 void ShowHelp(DWORD_PTR helpTopicId);
@@ -685,12 +636,11 @@ int MakeListWin();
 void DeleteListWin(void);
 HWND GetLocalHwnd(void);
 HWND GetRemoteHwnd(void);
-void GetListTabWidth(void);
 void SetListViewType(void);
 void GetRemoteDirForWnd(int Mode, int *CancelCheckWork);
 void GetLocalDirForWnd(void);
 void ReSortDispList(int Win, int *CancelCheckWork);
-bool CheckFname(std::wstring str, std::wstring const& regexp);
+bool CheckFname(std::wstring const& file, std::wstring const& spec);
 void SelectFileInList(HWND hWnd, int Type, std::vector<FILELIST> const& Base);
 void FindFileInList(HWND hWnd, int Type);
 int GetCurrentItem(int Win);
@@ -698,28 +648,22 @@ int GetItemCount(int Win);
 int GetSelectedCount(int Win);
 int GetFirstSelected(int Win, int All);
 int GetNextSelected(int Win, int Pos, int All);
-// ローカル側自動更新
-int GetHotSelected(int Win, char *Fname);
-int SetHotSelected(int Win, char *Fname);
-int FindNameNode(int Win, char *Name);
+std::wstring GetHotSelected(int Win);
+void SetHotSelected(int Win, std::wstring const& name);
 std::wstring GetNodeName(int Win, int Pos);
-void GetNodeName(int Win, int Pos, char *Buf, int Max);
-int GetNodeTime(int Win, int Pos, FILETIME *Buf);
 int GetNodeSize(int Win, int Pos, LONGLONG *Buf);
 int GetNodeAttr(int Win, int Pos, int *Buf);
 int GetNodeType(int Win, int Pos);
-void GetNodeOwner(int Win, int Pos, char *Buf, int Max);
 void EraseRemoteDirForWnd(void);
 double GetSelectedTotalSize(int Win);
 int MakeSelectedFileList(int Win, int Expand, int All, std::vector<FILELIST>& Base, int *CancelCheckWork);
-void MakeDroppedFileList(WPARAM wParam, char *Cur, std::vector<FILELIST>& Base);
-void MakeDroppedDir(WPARAM wParam, char *Cur);
-void AddRemoteTreeToFileList(int Num, char *Path, int IncDir, std::vector<FILELIST>& Base);
-const FILELIST* SearchFileList(const char* Fname, std::vector<FILELIST> const& Base, int Caps);
-static inline FILELIST* SearchFileList(const char* Fname, std::vector<FILELIST>& Base, int Caps) {
+std::tuple<fs::path, std::vector<FILELIST>> MakeDroppedFileList(WPARAM wParam);
+fs::path MakeDroppedDir(WPARAM wParam);
+void AddRemoteTreeToFileList(int Num, std::wstring const& Path, int IncDir, std::vector<FILELIST>& Base);
+const FILELIST* SearchFileList(std::wstring_view Fname, std::vector<FILELIST> const& Base, int Caps);
+static inline FILELIST* SearchFileList(std::wstring_view Fname, std::vector<FILELIST>& Base, int Caps) {
 	return const_cast<FILELIST*>(SearchFileList(Fname, static_cast<std::vector<FILELIST> const&>(Base), Caps));
 }
-int Assume1900or2000(int Year);
 void SetFilter(int *CancelCheckWork);
 void doDeleteRemoteFile(void);
 
@@ -743,7 +687,7 @@ void SetTransferTypeImm(int Mode);
 void SetTransferType(int Type);
 void DispTransferType(void);
 int AskTransferType(void);
-int AskTransferTypeAssoc(char *Fname, int Type);
+int AskTransferTypeAssoc(std::wstring_view path, int Type);
 void SaveTransferType(void);
 void SetHostKanjiCodeImm(int Mode);
 void SetHostKanjiCode(int Type);
@@ -787,7 +731,7 @@ HWND GetSbarWnd(void);
 void UpdateStatusBar();
 void DispCurrentWindow(int Win);
 void DispSelectedSpace(void);
-void DispLocalFreeSpace(char *Path);
+void DispLocalFreeSpace(fs::path const& directory);
 void DispTransferFiles(void);
 void DispDownloadSize(LONGLONG Size);
 bool NotifyStatusBar(const NMHDR* hdr);
@@ -799,7 +743,23 @@ void DeleteTaskWindow(void);
 HWND GetTaskWnd(void);
 void SetTaskMsg(_In_z_ _Printf_format_string_ const char* format, ...);
 void DispTaskMsg(void);
-void DoPrintf(_In_z_ _Printf_format_string_ const char* format, ...);
+void SetTaskMsg(UINT id, ...);
+namespace detail {
+	void Notice(UINT id, std::wformat_args args);
+	void Debug(std::wstring_view format, std::wformat_args args);
+}
+// メッセージを表示する
+template<class... Args>
+static inline void Notice(UINT id, const Args&... args) {
+	detail::Notice(id, std::make_wformat_args(args...));
+}
+// デバッグメッセージを表示する
+template<class... Args>
+static inline void Debug(std::wstring_view format, const Args&... args) {
+	detail::Debug(format, std::make_wformat_args(args...));
+}
+void Error(std::wstring_view functionName, int lastError = GetLastError());
+static inline void WSAError(std::wstring_view functionName, int lastError = WSAGetLastError()) { Error(functionName, lastError); }
 
 /*===== hostman.c =====*/
 
@@ -807,10 +767,10 @@ int SelectHost(int Type);
 int AddHostToList(HOSTDATA *Set, int Pos, int Level);
 int CopyHostFromList(int Num, HOSTDATA *Set);
 int CopyHostFromListInConnect(int Num, HOSTDATA *Set);
-int SetHostBookMark(int Num, char *Bmask, int Len);
-char *AskHostBookMark(int Num);
-int SetHostDir(int Num, const char* LocDir, const char* HostDir);
-int SetHostPassword(int Num, char *Pass);
+int SetHostBookMark(int Num, std::vector<std::wstring>&& bookmark);
+std::optional<std::vector<std::wstring>> AskHostBookMark(int Num);
+int SetHostDir(int Num, std::wstring_view LocDir, std::wstring_view HostDir);
+int SetHostPassword(int Num, std::wstring const& Pass);
 int SetHostSort(int Num, int LFSort, int LDSort, int RFSort, int RDSort);
 void DecomposeSortType(uint32_t Sort, int *LFSort, int *LDSort, int *RFSort, int *RDSort);
 int AskCurrentHost(void);
@@ -819,7 +779,7 @@ void CopyDefaultHost(HOSTDATA *Set);
 // ホスト共通設定機能
 void ResetDefaultHost(void);
 void SetDefaultHost(HOSTDATA *Set);
-int SearchHostName(char *Name);
+int SearchHostName(std::wstring_view name);
 void ImportFromWSFTP(void);
 // 暗号化通信対応
 int SetHostEncryption(int Num, int UseNoEncryption, int UseFTPES, int UseFTPIS, int UseSFTP);
@@ -828,22 +788,21 @@ int SetHostEncryption(int Num, int UseNoEncryption, int UseFTPES, int UseFTPIS, 
 
 void ConnectProc(int Type, int Num);
 void QuickConnectProc(void);
-void DirectConnectProc(char *unc, int Kanji, int Kana, int Fkanji, int TrMode);
+void DirectConnectProc(std::wstring&& unc, int Kanji, int Kana, int Fkanji, int TrMode);
 void HistoryConnectProc(int MenuCmd);
-char *AskHostAdrs(void);
+std::wstring_view AskHostAdrs();
 int AskHostPort(void);
 int AskHostNameKanji(void);
 int AskHostNameKana(void);
 int AskListCmdMode(void);
 int AskUseNLST_R(void);
-std::string AskHostChmodCmd();
+std::wstring AskHostChmodCmd();
 int AskHostTimeZone(void);
 int AskPasvMode(void);
-std::string AskHostLsName();
+std::wstring AskHostLsName();
 int AskHostType(void);
 int AskHostFireWall(void);
 int AskNoFullPathMode(void);
-char *AskHostUserName(void);
 void SaveCurrentSetToHost(void);
 int ReConnectCmdSkt(void);
 // int ReConnectTrnSkt(void);
@@ -862,14 +821,13 @@ int SetOSS(int wkOss);
 int AskOSS(void);
 #endif
 std::optional<sockaddr_storage> SocksReceiveReply(SOCKET s, int* CancelCheckWork);
-SOCKET connectsock(char *host, int port, char *PreMsg, int *CancelCheckWork);
+SOCKET connectsock(std::wstring&& host, int port, UINT prefixId, int *CancelCheckWork);
 SOCKET GetFTPListenSocket(SOCKET ctrl_skt, int *CancelCheckWork);
 int AskTryingConnect(void);
 int AskUseNoEncryption(void);
 int AskUseFTPES(void);
 int AskUseFTPIS(void);
 int AskUseSFTP(void);
-char *AskPrivateKey(void);
 // 同時接続対応
 int AskMaxThreadCount(void);
 int AskReuseCmdSkt(void);
@@ -889,15 +847,15 @@ int AskErrorReconnect(void);
 // ホスト側の設定ミス対策
 int AskNoPasvAdrs(void);
 
-/*===== cache.c =====*/
-
-fs::path MakeCacheFileName(int Num);
+// キャッシュのファイル名を作成する
+static inline fs::path MakeCacheFileName(int num) {
+	return tempDirectory() / std::format(L"_ffftp.{:03d}"sv, num);
+}
 
 /*===== ftpproc.c =====*/
 
 void DownloadProc(int ChName, int ForceFile, int All);
-void DirectDownloadProc(char *Fname);
-void InputDownloadProc(void);
+void DirectDownloadProc(std::wstring_view Fname);
 void MirrorDownloadProc(int Notify);
 void UploadListProc(int ChName, int All);
 void UploadDragProc(WPARAM wParam);
@@ -916,13 +874,9 @@ void SomeCmdProc(void);
 void CalcFileSizeProc(void);
 void DispCWDerror(HWND hWnd);
 void CopyURLtoClipBoard(void);
-// 同時接続対応
-//int ProcForNonFullpath(char *Path, char *CurDir, HWND hWnd, int Type);
-int ProcForNonFullpath(SOCKET cSkt, char *Path, char *CurDir, HWND hWnd, int *CancelCheckWork);
-void ReformToVMSstyleDirName(char *Path);
-void ReformToVMSstylePathName(char *Path);
+int ProcForNonFullpath(SOCKET cSkt, std::wstring& Path, std::wstring& CurDir, HWND hWnd, int* CancelCheckWork);
 #if defined(HAVE_OPENVMS)
-void ReformVMSDirName(char *DirName, int Flg);
+std::wstring ReformVMSDirName(std::wstring&& dirName);
 #endif
 // 自動切断対策
 void NoopProc(int Force);
@@ -932,42 +886,44 @@ void ReconnectProc(void);
 
 /*===== local.c =====*/
 
-int DoLocalCWD(const char *Path);
-void DoLocalMKD(const char* Path);
-void DoLocalPWD(char *Buf);
-void DoLocalRMD(const char* Path);
-void DoLocalDELE(const char* Path);
-void DoLocalRENAME(const char *Src, const char *Dst);
-void DispFileProperty(const char* Fname);
+bool DoLocalCWD(fs::path const& path);
+void DoLocalMKD(fs::path const& path);
+fs::path DoLocalPWD();
+void DoLocalRMD(fs::path const& path);
+void DoLocalDELE(fs::path const& path);
+void DoLocalRENAME(fs::path const& src, fs::path const& dst);
 
 /*===== remote.c =====*/
 
-int DoCWD(const char *Path, int Disp, int ForceGet, int ErrorBell);
-int DoCWDStepByStep(const char* Path, const char* Cur);
-int DoMKD(const char* Path);
+int DoCWD(std::wstring const& Path, int Disp, int ForceGet, int ErrorBell);
+int DoCWDStepByStep(std::wstring const& Path, std::wstring const& Cur);
+int DoMKD(std::wstring const& Path);
 void InitPWDcommand();
-int DoRMD(const char* Path);
-int DoDELE(const char* Path);
-int DoRENAME(const char *Src, const char *Dst);
-int DoCHMOD(const char *Path, const char *Mode);
-int DoSIZE(SOCKET cSkt, const char* Path, LONGLONG *Size, int *CancelCheckWork);
-int DoMDTM(SOCKET cSkt, const char* Path, FILETIME *Time, int *CancelCheckWork);
-// ホスト側の日時設定
-int DoMFMT(SOCKET cSkt, const char* Path, FILETIME *Time, int *CancelCheckWork);
-int DoQUOTE(SOCKET cSkt, const char* CmdStr, int *CancelCheckWork);
+int DoRMD(std::wstring const& path);
+int DoDELE(std::wstring const& path);
+int DoRENAME(std::wstring const& from, std::wstring const& to);
+int DoCHMOD(std::wstring const& path, std::wstring const& mode);
+int DoSIZE(SOCKET cSkt, std::wstring const& Path, LONGLONG *Size, int *CancelCheckWork);
+int DoMDTM(SOCKET cSkt, std::wstring const& Path, FILETIME *Time, int *CancelCheckWork);
+int DoMFMT(SOCKET cSkt, std::wstring const&, FILETIME *Time, int *CancelCheckWork);
+int DoQUOTE(SOCKET cSkt, std::wstring_view CmdStr, int* CancelCheckWork);
 SOCKET DoClose(SOCKET Sock);
 // 同時接続対応
 //int DoQUIT(SOCKET ctrl_skt);
 int DoQUIT(SOCKET ctrl_skt, int *CancelCheckWork);
-int DoDirListCmdSkt(const char* AddOpt, const char* Path, int Num, int *CancelCheckWork);
+int DoDirList(std::wstring_view AddOpt, int Num, int* CancelCheckWork);
 #if defined(HAVE_TANDEM)
 void SwitchOSSProc(void);
 #endif
-#define CommandProcTrn(CSKT, REPLY, CANCELCHECKWORK, ...) (command(CSKT, REPLY, CANCELCHECKWORK, __VA_ARGS__))
-int command(SOCKET cSkt, char* Reply, int* CancelCheckWork, _In_z_ _Printf_format_string_ const char* fmt, ...);
-int ReadReplyMessage(SOCKET cSkt, char *Buf, int Max, int *CancelCheckWork, char *Tmp);
+namespace detail {
+	std::tuple<int, std::wstring> command(SOCKET cSkt, int* CancelCheckWork, std::wstring&& cmd);
+}
+template<class... Args>
+static inline std::tuple<int, std::wstring> Command(SOCKET socket, int* CancelCheckWork, std::wstring_view format, const Args&... args) {
+	return socket == INVALID_SOCKET ? std::tuple{ 429, L""s } : detail::command(socket, CancelCheckWork, std::format(format, args...));
+}
+std::tuple<int, std::wstring> ReadReplyMessage(SOCKET cSkt, int *CancelCheckWork);
 int ReadNchar(SOCKET cSkt, char *Buf, int Size, int *CancelCheckWork);
-void ReportWSError(const char* Msg, UINT Error);
 
 /*===== getput.c =====*/
 
@@ -997,7 +953,7 @@ int AskTransferErrorDisplay(void);
 int LoadZoneID();
 void FreeZoneID();
 int IsZoneIDLoaded();
-int MarkFileAsDownloadedFromInternet(char* Fname);
+bool MarkFileAsDownloadedFromInternet(fs::path const& path);
 
 /*===== codecnv.c =====*/
 
@@ -1011,8 +967,8 @@ class CodeDetector {
 public:
 	void Test(std::string_view str);
 	int result() const {
-		DoPrintf("CodeDetector::result(): utf8 %d, sjis %d, euc %d, jis %d, nfc %d, nfd %d", utf8, sjis, euc, jis, int(nfc), int(nfd));
-		auto& [_, id] = std::max<std::tuple<int, int>>({
+		Debug(L"CodeDetector::result(): utf8 {}, sjis {}, euc {}, jis {}, nfc {}, nfd {}"sv, utf8, sjis, euc, jis, nfc, nfd);
+		auto [_, id] = std::max<std::tuple<int, int>>({
 			{ utf8, KANJI_UTF8N },
 			{ sjis, KANJI_SJIS },
 			{ euc, KANJI_EUC },
@@ -1034,8 +990,8 @@ public:
 };
 
 std::string ToCRLF(std::string_view source);
-std::string ConvertFrom(std::string_view str, int kanji);
-std::string ConvertTo(std::string_view str, int kanji, int kana);
+std::wstring ConvertFrom(std::string_view str, int kanji);
+std::string ConvertTo(std::wstring_view str, int kanji, int kana);
 
 /*===== option.c =====*/
 
@@ -1043,11 +999,7 @@ void SetOption();
 int SortSetting(void);
 // hostman.cで使用
 int GetDecimalText(HWND hDlg, int Ctrl);
-void SetDecimalText(HWND hDlg, int Ctrl, int Num);
 void CheckRange2(int *Cur, int Max, int Min);
-void AddTextToListBox(HWND hDlg, char *Str, int CtrlList, int BufSize);
-void SetMultiTextToList(HWND hDlg, int CtrlList, char *Text);
-void GetMultiTextFromList(HWND hDlg, int CtrlList, char *Buf, int BufSize);
 
 /*===== bookmark.c =====*/
 
@@ -1060,14 +1012,13 @@ void EditBookMark();
 
 /*===== registry.c =====*/
 
-void SaveRegistry(void);
-int LoadRegistry(void);
+void SaveRegistry();
+bool LoadRegistry();
 void ClearRegistry();
 // ポータブル版判定
 void ClearIni(void);
-void SetMasterPassword( const char* );
-// セキュリティ強化
-void GetMasterPassword(char*);
+void SetMasterPassword(std::wstring_view password = {});
+std::wstring GetMasterPassword();
 int GetMasterPasswordStatus(void);
 int ValidateMasterPassword(void);
 void SaveSettingsToFile(void);
@@ -1098,43 +1049,15 @@ bool ConnectRas(bool dialup, bool explicitly, bool confirm, std::wstring const& 
 
 /*===== misc.c =====*/
 
-void SetYenTail(char *Str);
-void RemoveYenTail(char *Str);
-void SetSlashTail(char *Str);
-void ReplaceAll(char *Str, char Src, char Dst);
-int IsDigitSym(int Ch, int Sym);
-int StrAllSameChar(const char* Str, char Ch);
-void RemoveTailingSpaces(char *Str);
-const char* stristr(const char* s1, const char* s2);
-static inline char* stristr(char* s1, const char* s2) { return const_cast<char*>(stristr(static_cast<const char*>(s1), s2)); }
-const char* GetNextField(const char* Str);
-int GetOneField(const char* Str, char *Buf, int Max);
-void RemoveComma(char *Str);
-const char* GetFileName(const char* Path);
-const char* GetFileExt(const char* Path);
-void RemoveFileName(const char* Path, char *Buf);
-void GetUpperDir(char *Path);
-void GetUpperDirEraseTopSlash(char *Path);
-int AskDirLevel(const char* Path);
-void MakeSizeString(double Size, char *Buf);
-void DispStaticText(HWND hWnd, const char* Str);
-int StrMultiLen(const char *Str);
+std::wstring SetSlashTail(std::wstring&& path);
+std::wstring ReplaceAll(std::wstring&& str, wchar_t from, wchar_t to);
+std::wstring_view GetFileName(std::wstring_view path);
+std::wstring MakeSizeString(double size);
+void DispStaticText(HWND hWnd, std::wstring text);
 void RectClientToScreen(HWND hWnd, RECT *Rect);
-int SplitUNCpath(char *unc, char *Host, char *Path, char *File, char *User, char *Pass, int *Port);
-int TimeString2FileTime(const char *Time, FILETIME *Buf);
-void FileTime2TimeString(const FILETIME *Time, char *Buf, int Mode, int InfoExist, int ShowSeconds);
-void SpecificLocalFileTime2FileTime(FILETIME *Time, int TimeZone);
-int AttrString2Value(const char *Str);
-// ファイルの属性を数字で表示
-//void AttrValue2String(int Attr, char *Buf);
-void AttrValue2String(int Attr, char *Buf, int ShowNumber);
-void FormatIniString(char *Str);
 fs::path SelectFile(bool open, HWND hWnd, UINT titleId, const wchar_t* initialFileName, const wchar_t* extension, std::initializer_list<FileType> fileTypes);
-int SelectDir(HWND hWnd, char *Buf, size_t MaxLen);
-int MoveFileToTrashCan(const char *Path);
-std::string MakeNumString(LONGLONG Num);
-// 異なるファイルが表示されるバグ修正
-char* MakeDistinguishableFileName(char* Out, const char* In);
+fs::path SelectDir(HWND hWnd);
+fs::path MakeDistinguishableFileName(fs::path&& path);
 #if defined(HAVE_TANDEM)
 void CalcExtentSize(TRANSPACKET *Pkt, LONGLONG Size);
 #endif
@@ -1143,7 +1066,7 @@ int CalcPixelY(int y);
 
 /*===== opie.c =====*/
 
-int Make6WordPass(int seq, char *seed, char *pass, int type, char *buf);
+std::string Make6WordPass(int seq, std::string_view seed, std::string_view pass, int type);
 
 /*===== tool.c =====*/
 
@@ -1164,14 +1087,14 @@ std::vector<HISTORYDATA> const& GetHistories();
 BOOL LoadSSL();
 void FreeSSL();
 void ShowCertificate();
-BOOL AttachSSL(SOCKET s, SOCKET parent, BOOL* pbAborted, const char* ServerName);
+BOOL AttachSSL(SOCKET s, SOCKET parent, BOOL* pbAborted, std::wstring_view ServerName);
 bool IsSecureConnection();
 BOOL IsSSLAttached(SOCKET s);
 int MakeSocketWin();
 void DeleteSocketWin(void);
-void SetAsyncTableData(SOCKET s, std::variant<sockaddr_storage, std::tuple<std::string, int>> const& target);
+void SetAsyncTableData(SOCKET s, std::variant<sockaddr_storage, std::tuple<std::wstring, int>> const& target);
 void SetAsyncTableDataMapPort(SOCKET s, int Port);
-int GetAsyncTableData(SOCKET s, std::variant<sockaddr_storage, std::tuple<std::string, int>>& target);
+int GetAsyncTableData(SOCKET s, std::variant<sockaddr_storage, std::tuple<std::wstring, int>>& target);
 int GetAsyncTableDataMapPort(SOCKET s, int* Port);
 SOCKET do_socket(int af, int type, int protocol);
 int do_connect(SOCKET s, const struct sockaddr *name, int namelen, int *CancelCheckWork);
@@ -1186,15 +1109,15 @@ void RemoveReceivedData(SOCKET s);
 int LoadUPnP();
 void FreeUPnP();
 int IsUPnPLoaded();
-int AddPortMapping(const char* Adrs, int Port, char* ExtAdrs);
-int RemovePortMapping(int Port);
+std::optional<std::wstring> AddPortMapping(std::wstring const& internalAddress, int port);
+bool RemovePortMapping(int port);
 int CheckClosedAndReconnect(void);
 // 同時接続対応
 int CheckClosedAndReconnectTrnSkt(SOCKET *Skt, int *CancelCheckWork);
 
 
+extern int DebugConsole;
 extern int DispIgnoreHide;
-extern HCRYPTPROV HCryptProv;
 
 template<class Target, class Source>
 constexpr auto data_as(Source& source) {
@@ -1230,19 +1153,21 @@ template<class DstChar, class Fn>
 static inline auto convert(Fn&& fn, std::wstring_view src) {
 	return convert<DstChar, wchar_t>(std::forward<Fn>(fn), src);
 }
-template<class Char, class Traits, class Alloc>
-static inline auto operator+(std::basic_string<Char, Traits, Alloc> const& left, std::basic_string_view<Char, Traits> const& right) {
-	std::basic_string<Char, Traits, Alloc> result(size(left) + size(right), Char(0));
-	auto it = std::copy(begin(left), end(left), begin(result));
-	std::copy(begin(right), end(right), it);
+template<class Char, class... Str>
+static inline auto concat(std::basic_string_view<Char> first, Str&&... rest) {
+	std::basic_string<Char> result;
+	result.reserve((std::size(first) + ... + std::size(rest)));
+	((result += first) += ... += rest);
 	return result;
 }
-template<class Char, class Traits, class Alloc>
-static inline auto operator+(std::basic_string_view<Char, Traits> const& left, std::basic_string<Char, Traits, Alloc> const& right) {
-	std::basic_string<Char, Traits, Alloc> result(size(left) + size(right), Char(0));
-	auto it = std::copy(begin(left), end(left), begin(result));
-	std::copy(begin(right), end(right), it);
-	return result;
+static inline auto operator+(std::string_view left, std::string_view right) {
+	return concat(left, right);
+}
+static inline auto operator+(std::wstring_view left, std::wstring_view right) {
+	return concat(left, right);
+}
+static inline auto sv(auto const& sm) {
+	return std::basic_string_view{ sm.first, sm.second };
 }
 static inline auto u8(std::string_view utf8) {
 	return convert<wchar_t>([](auto src, auto srclen, auto dst, auto dstlen) { return MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, src, srclen, dst, dstlen); }, utf8);
@@ -1254,16 +1179,30 @@ template<class Char>
 static inline auto u8(const Char* str, size_t len) {
 	return u8(std::basic_string_view<Char>{ str, len });
 }
-static auto ieq(std::wstring const& left, std::wstring const& right) {
-	return std::equal(begin(left), end(left), begin(right), end(right), [](auto const l, auto const r) { return std::towupper(l) == std::towupper(r); });
+static auto ieq(std::string_view left, std::string_view right) {
+	return std::equal(begin(left), end(left), begin(right), end(right), [](auto const l, auto const r) { return std::toupper(l) == std::toupper(r); });
 }
 static auto ieq(std::wstring_view left, std::wstring_view right) {
 	return std::equal(begin(left), end(left), begin(right), end(right), [](auto const l, auto const r) { return std::towupper(l) == std::towupper(r); });
 }
-static auto lc(std::wstring_view source) {
-	std::wstring result{ source };
-	_wcslwr(data(result));
-	return result;
+static inline auto lc(std::string&& str) {
+	_strlwr(data(str));
+	return str;
+}
+static inline auto lc(std::wstring&& str) {
+	_wcslwr(data(str));
+	return str;
+}
+template<class String>
+static inline auto lc(String const& src) {
+	return lc(std::basic_string(std::begin(src), std::end(src)));
+}
+static inline auto uc(std::wstring&& str) {
+	_wcsupr(data(str));
+	return str;
+}
+static inline auto uc(std::wstring_view sv) {
+	return uc(std::wstring{ sv });
 }
 template<class Char, class Evaluator>
 static inline auto replace(std::basic_string_view<Char> input, boost::basic_regex<Char> const& pattern, Evaluator&& evaluator) {
@@ -1276,6 +1215,31 @@ static inline auto replace(std::basic_string_view<Char> input, boost::basic_rege
 	}
 	replaced.append(last, data(input) + size(input));
 	return replaced;
+}
+namespace detail {
+	static inline int vscprintf(char const* const format, va_list args) { return _vscprintf_p(format, args); }
+	static inline int vscprintf(wchar_t const* const format, va_list args) { return _vscwprintf_p(format, args); }
+	static inline int vsprintf(_Out_writes_(size) _Post_z_ char* const buffer, size_t const size, char const* const format, va_list args) { return _vsprintf_p(buffer, size, format, args); }
+	static inline int vsprintf(_Out_writes_(size) _Post_z_ wchar_t* const buffer, size_t const size, wchar_t const* const format, va_list args) { return _vswprintf_p(buffer, size, format, args); }
+	template<class Char>
+	static inline auto vstrprintf(int capacity, Char const* const format, va_list args) {
+		if (capacity == -1)
+			capacity = vscprintf(format, args);
+		assert(0 < capacity);
+		std::basic_string buffer(capacity, Char{});
+		int length = vsprintf(data(buffer), (size_t)capacity + 1, format, args);
+		assert(length <= capacity);
+		buffer.resize(length);
+		return buffer;
+	}
+}
+template<int capacity = -1, class Char>
+static inline auto strprintf(_In_z_ _Printf_format_string_ Char const* const format, ...) {
+	va_list args;
+	va_start(args, format);
+	auto result = detail::vstrprintf(capacity, format, args);
+	va_end(args);
+	return result;
 }
 template<int captionId = IDS_APP>
 static inline auto Message(HWND owner, int textId, DWORD style) {
@@ -1340,31 +1304,30 @@ static inline auto AddressToString(sockaddr_storage const& sa) {
 		return AddressPortToString(&local);
 	}
 }
-extern bool SupportIdn;
-static inline auto IdnToAscii(std::wstring const& unicode) {
-	if (!SupportIdn || empty(unicode))
-		return unicode;
+static inline auto IdnToAscii(std::wstring_view unicode) {
+	if (empty(unicode))
+		return L""s;
 	return convert<wchar_t>([](auto src, auto srclen, auto dst, auto dstlen) { return IdnToAscii(0, src, srclen, dst, dstlen); }, unicode);
 }
 static inline auto NormalizeString(NORM_FORM form, std::wstring_view src) {
-	if (!SupportIdn || empty(src))
+	if (empty(src))
 		return std::wstring{ src };
 	return convert<wchar_t>([form](auto src, auto srclen, auto dst, auto dstlen) { return NormalizeString(form, src, srclen, dst, dstlen); }, src);
 }
-static inline auto InputDialog(int dialogId, HWND parent, char *Title, char *Buf, size_t maxlength = 0, int* flag = nullptr, int helpTopicId = IDH_HELP_TOPIC_0000001) {
+static inline auto InputDialog(int dialogId, HWND parent, UINT titleId, std::wstring& text, size_t maxlength = 0, int* flag = nullptr, int helpTopicId = IDH_HELP_TOPIC_0000001) {
 	struct Data {
 		using result_t = bool;
-		char* Title;
-		char* Buf;
+		UINT titleId;
+		std::wstring& text;
 		size_t maxlength;
 		int* flag;
 		int helpTopicId;
-		Data(char* Title, char* Buf, size_t maxlength, int* flag, int helpTopicId) : Title{ Title }, Buf{ Buf }, maxlength{ maxlength }, flag{ flag }, helpTopicId{ helpTopicId } {}
+		Data(UINT titleId, std::wstring& text, size_t maxlength, int* flag, int helpTopicId) : titleId{ titleId }, text{ text }, maxlength{ maxlength }, flag{ flag }, helpTopicId{ helpTopicId } {}
 		INT_PTR OnInit(HWND hDlg) {
-			if (Title)
-				SetText(hDlg, u8(Title));
+			if (titleId != 0)
+				SetText(hDlg, GetString(titleId));
 			SendDlgItemMessageW(hDlg, INP_INPSTR, EM_LIMITTEXT, maxlength - 1, 0);
-			SetText(hDlg, INP_INPSTR, u8(Buf));
+			SetText(hDlg, INP_INPSTR, text);
 			if (flag)
 				SendDlgItemMessageW(hDlg, INP_ANONYMOUS, BM_SETCHECK, *flag, 0);
 			return TRUE;
@@ -1372,7 +1335,7 @@ static inline auto InputDialog(int dialogId, HWND parent, char *Title, char *Buf
 		void OnCommand(HWND hDlg, WORD id) {
 			switch (id) {
 			case IDOK:
-				strncpy(Buf, u8(GetText(hDlg, INP_INPSTR)).c_str(), maxlength - 1);
+				text = GetText(hDlg, INP_INPSTR);
 				if (flag)
 					*flag = (int)SendDlgItemMessageW(hDlg, INP_ANONYMOUS, BM_GETCHECK, 0, 0);
 				EndDialog(hDlg, true);
@@ -1384,13 +1347,13 @@ static inline auto InputDialog(int dialogId, HWND parent, char *Title, char *Buf
 				ShowHelp(helpTopicId);
 				break;
 			case INP_BROWSE:
-				if (char Tmp[FMAX_PATH + 1]; SelectDir(hDlg, Tmp, FMAX_PATH) == TRUE)
-					SetText(hDlg, INP_INPSTR, u8(Tmp));
+				if (auto path = SelectDir(hDlg); !path.empty())
+					SetText(hDlg, INP_INPSTR, path);
 				break;
 			}
 		}
 	};
-	return Dialog(GetFtpInst(), dialogId, parent, Data{ Title, Buf, maxlength, flag, helpTopicId });
+	return Dialog(GetFtpInst(), dialogId, parent, Data{ titleId, text, maxlength, flag, helpTopicId });
 }
 struct ProcessInformation : PROCESS_INFORMATION {
 	ProcessInformation() : PROCESS_INFORMATION{ INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE } {}
@@ -1420,3 +1383,48 @@ static auto GetErrorMessage(int lastError) {
 	LocalFree(buffer);
 	return std::move(message);
 }
+
+template<class Fn>
+static inline std::invoke_result_t<Fn, BCRYPT_ALG_HANDLE> BCrypt(LPCWSTR algid, Fn&& fn) {
+	BCRYPT_ALG_HANDLE alg;
+	if (auto status = BCryptOpenAlgorithmProvider(&alg, algid, nullptr, 0); status != STATUS_SUCCESS) {
+		Debug(L"BCryptOpenAlgorithmProvider({}) failed: 0x{:08X}."sv, algid, status);
+		return {};
+	}
+	auto result = std::invoke(std::forward<Fn>(fn), alg);
+	BCryptCloseAlgorithmProvider(alg, 0);
+	return result;
+}
+template<class Fn>
+static inline auto HashOpen(LPCWSTR algid, Fn&& fn) {
+	return BCrypt(algid, [fn](BCRYPT_ALG_HANDLE alg) -> std::invoke_result_t<Fn, BCRYPT_ALG_HANDLE, std::vector<UCHAR>&&, std::vector<UCHAR>&&> {
+		DWORD objlen, hashlen, resultlen;
+		if (auto status = BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objlen), sizeof objlen, &resultlen, 0); status != STATUS_SUCCESS || resultlen != sizeof objlen) {
+			Debug(L"BCryptGetProperty({}) failed: 0x{:08X} or invalid length: {}."sv, BCRYPT_OBJECT_LENGTH, status, resultlen);
+			return {};
+		}
+		if (auto status = BCryptGetProperty(alg, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hashlen), sizeof hashlen, &resultlen, 0); status != STATUS_SUCCESS || resultlen != sizeof hashlen) {
+			Debug(L"BCryptGetProperty({}) failed: 0x{:08X} or invalid length: {}."sv, BCRYPT_HASH_LENGTH, status, resultlen);
+			return {};
+		}
+		return std::invoke(fn, alg, std::vector<UCHAR>(objlen), std::vector<UCHAR>(hashlen));
+	});
+}
+template<class... Ranges>
+static inline auto HashData(BCRYPT_ALG_HANDLE alg, std::vector<UCHAR>& obj, std::vector<UCHAR>& hash, Ranges const&... ranges) {
+	NTSTATUS status;
+	if (BCRYPT_HASH_HANDLE handle; (status = BCryptCreateHash(alg, &handle, data(obj), size_as<ULONG>(obj), nullptr, 0, 0)) == STATUS_SUCCESS) {
+		for (auto bytes : { std::as_bytes(std::span{ ranges }.subspan(0))... })
+			if ((status = BCryptHashData(handle, const_cast<PUCHAR>(data_as<const UCHAR>(bytes)), size_as<ULONG>(bytes), 0)) != STATUS_SUCCESS) {
+				Debug(L"{}() failed: 0x{:08X}."sv, L"BCryptHashData"sv, status);
+				break;
+			}
+		if (status == STATUS_SUCCESS && (status = BCryptFinishHash(handle, data(hash), size_as<DWORD>(hash), 0)) != STATUS_SUCCESS)
+			Debug(L"{}() failed: 0x{:08X}."sv, L"BCryptFinishHash"sv, status);
+		BCryptDestroyHash(handle);
+	} else
+		Debug(L"{}() failed: 0x{:08X}."sv, L"BCryptCreateHash"sv, status);
+	return status == STATUS_SUCCESS;
+}
+
+FILELIST::FILELIST(std::string_view original, char node, char link, int64_t size, int attr, FILETIME time, std::string_view owner, char infoExist) : Original{ original }, Node{ node }, Link{ link }, Size{ size }, Attr{ attr }, Time{ time }, Owner{ u8(owner) }, InfoExist{ infoExist } {}

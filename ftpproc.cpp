@@ -36,31 +36,32 @@ static int CheckRemoteFile(TRANSPACKET *Pkt, std::vector<FILELIST> const& ListLi
 static void DispMirrorFiles(std::vector<FILELIST> const& Local, std::vector<FILELIST> const& Remote);
 static void MirrorDeleteAllLocalDir(std::vector<FILELIST> const& Local, TRANSPACKET& item, std::forward_list<TRANSPACKET>& list);
 static int CheckLocalFile(TRANSPACKET *Pkt);
-static void RemoveAfterSemicolon(char *Path);
+static std::wstring RemoveAfterSemicolon(std::wstring&& path);
 static void MirrorDeleteAllDir(std::vector<FILELIST> const& Remote, TRANSPACKET& item, std::forward_list<TRANSPACKET>& list);
 static int MirrorNotify(bool upload);
 static void CountMirrorFiles(HWND hDlg, std::forward_list<TRANSPACKET> const& list);
-static int AskMirrorNoTrn(char *Fname, int Mode);
-static int AskUploadFileAttr(char *Fname);
-static bool UpDownAsDialog(int win);
-static void DeleteAllDir(std::vector<FILELIST> const& Dt, int Win, int *Sw, int *Flg, char *CurDir);
-static void DelNotifyAndDo(FILELIST const& Dt, int Win, int *Sw, int *Flg, char *CurDir);
+static int AskMirrorNoTrn(std::wstring_view path, int Mode);
+static int AskUploadFileAttr(std::wstring const& path);
+static bool UpDownAsDialog(std::wstring& name, int win);
+static void DeleteAllDir(std::vector<FILELIST> const& Dt, int Win, int *Sw, int *Flg, std::wstring& CurDir);
+static void DelNotifyAndDo(FILELIST const& Dt, int Win, int *Sw, int *Flg, std::wstring& CurDir);
 static void SetAttrToDialog(HWND hWnd, int Attr);
 static int GetAttrFromDialog(HWND hDlg);
-static int RenameUnuseableName(char *Fname);
+static std::wstring ReformToVMSstyleDirName(std::wstring&& path);
+static std::wstring ReformToVMSstylePathName(std::wstring_view path);
+static std::wstring RenameUnuseableName(std::wstring&& filename);
 
 /* 設定値 */
 extern int FnameCnv;
 extern int RecvMode;
 extern int SendMode;
 extern int MoveMode;
-extern char MirrorNoTrn[MIRROR_LEN+1];
-extern char MirrorNoDel[MIRROR_LEN+1];
+std::vector<std::wstring> MirrorNoTrn = { L"*.bak"s };
+std::vector<std::wstring> MirrorNoDel;
 extern int MirrorFnameCnv;
-extern char DefAttrList[DEFATTRLIST_LEN+1];
+std::vector<std::wstring> DefAttrList;
 extern SIZE MirrorDlgSize;
 extern int VaxSemicolon;
-extern int DebugConsole;
 extern int CancelFlg;
 // ディレクトリ自動作成
 extern int MakeAllDir;
@@ -70,11 +71,6 @@ extern int AbortOnListError;
 extern int MirrorNoTransferContents;
 // タイムスタンプのバグ修正
 extern int DispTimeSeconds;
-
-/*===== ローカルなワーク =====*/
-
-static char TmpString[FMAX_PATH+80];		/* テンポラリ */
-
 int UpExistMode = EXIST_OVW;		/* アップロードで同じ名前のファイルがある時の扱い方 EXIST_xxx */
 int ExistMode = EXIST_OVW;		/* 同じ名前のファイルがある時の扱い方 EXIST_xxx */
 static int ExistNotify;		/* 確認ダイアログを出すかどうか YES/NO */
@@ -91,48 +87,34 @@ static int ExistNotify;		/* 確認ダイアログを出すかどうか YES/NO */
 *		なし
 *----------------------------------------------------------------------------*/
 
-// ディレクトリ自動作成
 // ローカル側のパスから必要なフォルダを作成
-int MakeDirFromLocalPath(char* LocalFile, char* Old)
-{
+void MakeDirFromLocalPath(fs::path const& LocalFile, fs::path const& Old) {
 	TRANSPACKET Pkt;
-	char* pDelimiter;
-	char* pNext;
-	char* Cat;
-	size_t Len;
-	int Make;
-	pDelimiter = LocalFile;
-	Make = NO;
-	while(pNext = strchr(pDelimiter, '\\'))
-	{
-		Len = pNext - LocalFile;
-		strncpy(Pkt.LocalFile, LocalFile, Len);
-		Pkt.LocalFile[Len] = '\0';
-		if(strncmp(LocalFile, Old, Len + 1) != 0)
-		{
-			Cat = Pkt.LocalFile + (pDelimiter - LocalFile);
-			if(FnameCnv == FNAME_LOWER)
-				_strlwr(Cat);
-			else if(FnameCnv == FNAME_UPPER)
-				_strupr(Cat);
-			ReplaceAll(Pkt.LocalFile, '/', '\\');
-
-			strcpy(Pkt.Cmd, "MKD ");
-			strcpy(Pkt.RemoteFile, "");
+	auto oit = Old.begin();
+	fs::path path;
+	for (auto& current : LocalFile) {
+		if (oit != Old.end() && current == *oit) {
+			++oit;
+			path /= current;
+		} else {
+			oit = Old.end();
+			auto name = current.native();
+			if (FnameCnv == FNAME_LOWER)
+				_wcslwr(data(name));
+			else if (FnameCnv == FNAME_UPPER)
+				_wcsupr(data(name));
+			path /= name;
+			Pkt.Local = path;
+			Pkt.Command = L"MKD "s;
+			Pkt.Remote.clear();
 			AddTransFileList(&Pkt);
-
-			Make = YES;
 		}
-		pDelimiter = pNext + 1;
 	}
-	return Make;
 }
 
 void DownloadProc(int ChName, int ForceFile, int All)
 {
 	TRANSPACKET Pkt;
-	// ディレクトリ自動作成
-	char Tmp[FMAX_PATH+1];
 	// ファイル一覧バグ修正
 	int ListSts;
 
@@ -150,8 +132,8 @@ void DownloadProc(int ChName, int ForceFile, int All)
 
 		if(AskNoFullPathMode() == YES)
 		{
-			strcpy(Pkt.Cmd, "SETCUR");
-			strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
+			Pkt.Command = L"SETCUR"s;
+			Pkt.Remote = AskRemoteCurDir();
 			AddTransFileList(&Pkt);
 		}
 
@@ -159,46 +141,34 @@ void DownloadProc(int ChName, int ForceFile, int All)
 			// ファイル一覧バグ修正
 			if (AbortOnListError == YES && ListSts == FFFTP_FAIL)
 				break;
-			strcpy(Pkt.LocalFile, AskLocalCurDir().u8string().c_str());
-			SetYenTail(Pkt.LocalFile);
-			strcpy(TmpString, f.File);
+			Pkt.Local = AskLocalCurDir();
+			auto name = f.Name;
 			if (ChName == NO || ForceFile == NO && f.Node == NODE_DIR) {
 				if (FnameCnv == FNAME_LOWER)
-					_strlwr(TmpString);
+					name = lc(std::move(name));
 				else if (FnameCnv == FNAME_UPPER)
-					_strupr(TmpString);
-				RemoveAfterSemicolon(TmpString);
-				if (RenameUnuseableName(TmpString) == FFFTP_FAIL)
-					break;
+					name = uc(std::move(name));
+				name = RemoveAfterSemicolon(std::move(name));
 			} else {
-				if (!UpDownAsDialog(WIN_REMOTE) || RenameUnuseableName(TmpString) == FFFTP_FAIL)
+				if (!UpDownAsDialog(name, WIN_REMOTE))
 					break;
 			}
-			strcat(Pkt.LocalFile, TmpString);
-			ReplaceAll(Pkt.LocalFile, '/', '\\');
+			name = RenameUnuseableName(std::move(name));
+			if (empty(name))
+				break;
+			Pkt.Local /= name;
 
 			if (ForceFile == NO && f.Node == NODE_DIR) {
-				strcpy(Pkt.Cmd, "MKD ");
-				strcpy(Pkt.RemoteFile, "");
+				Pkt.Command = L"MKD "s;
+				Pkt.Remote.clear();
 				AddTransFileList(&Pkt);
 			} else if (f.Node == NODE_FILE || ForceFile == YES && f.Node == NODE_DIR) {
-				if (AskHostType() == HTYPE_ACOS) {
-					strcpy(Pkt.RemoteFile, "'");
-					strcat(Pkt.RemoteFile, AskHostLsName().c_str());
-					strcat(Pkt.RemoteFile, "(");
-					strcat(Pkt.RemoteFile, f.File);
-					strcat(Pkt.RemoteFile, ")");
-					strcat(Pkt.RemoteFile, "'");
-				} else if (AskHostType() == HTYPE_ACOS_4) {
-					strcpy(Pkt.RemoteFile, f.File);
-				} else {
-					strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
-					SetSlashTail(Pkt.RemoteFile);
-					strcat(Pkt.RemoteFile, f.File);
-					ReplaceAll(Pkt.RemoteFile, '\\', '/');
-				}
+				Pkt.Remote
+					= AskHostType() == HTYPE_ACOS ? std::format(L"'{}({})'"sv, AskHostLsName(), f.Name)
+					: AskHostType() == HTYPE_ACOS_4 ? f.Name
+					: ReplaceAll(SetSlashTail(std::wstring{ AskRemoteCurDir() }) + f.Name, L'\\', L'/');
 
-				strcpy(Pkt.Cmd, "RETR ");
+				Pkt.Command = L"RETR "s;
 #if defined(HAVE_TANDEM)
 				if (AskHostType() == HTYPE_TANDEM) {
 					if (AskTransferType() != TYPE_X) {
@@ -212,7 +182,7 @@ void DownloadProc(int ChName, int ForceFile, int All)
 					}
 				} else
 #endif
-					Pkt.Type = AskTransferTypeAssoc(Pkt.RemoteFile, AskTransferType());
+					Pkt.Type = AskTransferTypeAssoc(Pkt.Remote, AskTransferType());
 				Pkt.Size = f.Size;
 				Pkt.Time = f.Time;
 				Pkt.KanjiCode = AskHostKanjiCode();
@@ -220,8 +190,7 @@ void DownloadProc(int ChName, int ForceFile, int All)
 				Pkt.KanjiCodeDesired = AskLocalKanjiCode();
 				Pkt.KanaCnv = AskHostKanaCnv();
 
-				// ディレクトリ自動作成
-				strcpy(Tmp, Pkt.LocalFile);
+				auto Tmp = Pkt.Local;
 				Pkt.Mode = CheckLocalFile(&Pkt);	/* Pkt.ExistSize がセットされる */
 				// ミラーリング設定追加
 				Pkt.NoTransfer = NO;
@@ -229,7 +198,7 @@ void DownloadProc(int ChName, int ForceFile, int All)
 					break;
 				if (Pkt.Mode != EXIST_IGNORE) {
 					if (MakeAllDir == YES)
-						MakeDirFromLocalPath(Pkt.LocalFile, Tmp);
+						MakeDirFromLocalPath(Pkt.Local, Tmp);
 					AddTransFileList(&Pkt);
 				}
 			}
@@ -237,8 +206,8 @@ void DownloadProc(int ChName, int ForceFile, int All)
 
 		if(AskNoFullPathMode() == YES)
 		{
-			strcpy(Pkt.Cmd, "BACKCUR");
-			strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
+			Pkt.Command = L"BACKCUR"s;
+			Pkt.Remote = AskRemoteCurDir();
 			AddTransFileList(&Pkt);
 		}
 
@@ -254,20 +223,9 @@ void DownloadProc(int ChName, int ForceFile, int All)
 }
 
 
-/*----- 指定されたファイルを一つダウンロードする ------------------------------
-*
-*	Parameter
-*		char *Fname : ファイル名
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-void DirectDownloadProc(char *Fname)
-{
+// 指定されたファイルを一つダウンロードする
+void DirectDownloadProc(std::wstring_view Fname) {
 	TRANSPACKET Pkt;
-	// ディレクトリ自動作成
-	char Tmp[FMAX_PATH+1];
 
 	// 同時接続対応
 	CancelFlg = NO;
@@ -281,50 +239,27 @@ void DirectDownloadProc(char *Fname)
 
 		if(AskNoFullPathMode() == YES)
 		{
-			strcpy(Pkt.Cmd, "SETCUR");
-			strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
+			Pkt.Command = L"SETCUR"s;
+			Pkt.Remote = AskRemoteCurDir();
 			AddTransFileList(&Pkt);
 		}
 
-		if(strlen(Fname) > 0)
-		{
-			strcpy(Pkt.LocalFile, AskLocalCurDir().u8string().c_str());
-			SetYenTail(Pkt.LocalFile);
-			strcpy(TmpString, Fname);
-			if(FnameCnv == FNAME_LOWER)
-				_strlwr(TmpString);
-			else if(FnameCnv == FNAME_UPPER)
-				_strupr(TmpString);
-			RemoveAfterSemicolon(TmpString);
-
-			if(RenameUnuseableName(TmpString) == FFFTP_SUCCESS)
+		if (!empty(Fname)) {
+			Pkt.Local = AskLocalCurDir();
+			auto TmpString = std::wstring{ Fname };
+			TmpString = FnameCnv == FNAME_LOWER ? lc(std::move(TmpString)) : FnameCnv == FNAME_UPPER ? uc(std::move(TmpString)) : TmpString;
+			TmpString = RemoveAfterSemicolon(std::move(TmpString));
+			if (auto const filename = RenameUnuseableName(std::move(TmpString)); !empty(filename))
 			{
-				strcat(Pkt.LocalFile, TmpString);
-				ReplaceAll(Pkt.LocalFile, '/', '\\');
+				Pkt.Local /= filename;
 
-				if(AskHostType() == HTYPE_ACOS)
-				{
-					strcpy(Pkt.RemoteFile, "'");
-					strcat(Pkt.RemoteFile, AskHostLsName().c_str());
-					strcat(Pkt.RemoteFile, "(");
-					strcat(Pkt.RemoteFile, Fname);
-					strcat(Pkt.RemoteFile, ")");
-					strcat(Pkt.RemoteFile, "'");
-				}
-				else if(AskHostType() == HTYPE_ACOS_4)
-				{
-					strcpy(Pkt.RemoteFile, Fname);
-				}
-				else
-				{
-					strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
-					SetSlashTail(Pkt.RemoteFile);
-					strcat(Pkt.RemoteFile, Fname);
-					ReplaceAll(Pkt.RemoteFile, '\\', '/');
-				}
+				Pkt.Remote
+					= AskHostType() == HTYPE_ACOS ? std::format(L"'{}({})'"sv, AskHostLsName(), Fname)
+					: AskHostType() == HTYPE_ACOS_4 ? std::wstring{ Fname }
+					: ReplaceAll(SetSlashTail(std::wstring{ AskRemoteCurDir() }) + Fname, L'\\', L'/');
 
-				strcpy(Pkt.Cmd, "RETR-S ");
-				Pkt.Type = AskTransferTypeAssoc(Pkt.RemoteFile, AskTransferType());
+				Pkt.Command = L"RETR-S "s;
+				Pkt.Type = AskTransferTypeAssoc(Pkt.Remote, AskTransferType());
 
 				/* サイズと日付は転送側スレッドで取得し、セットする */
 
@@ -333,8 +268,7 @@ void DirectDownloadProc(char *Fname)
 				Pkt.KanjiCodeDesired = AskLocalKanjiCode();
 				Pkt.KanaCnv = AskHostKanaCnv();
 
-				// ディレクトリ自動作成
-				strcpy(Tmp, Pkt.LocalFile);
+				auto Tmp = Pkt.Local;
 				Pkt.Mode = CheckLocalFile(&Pkt);	/* Pkt.ExistSize がセットされる */
 				// ミラーリング設定追加
 				Pkt.NoTransfer = NO;
@@ -343,7 +277,7 @@ void DirectDownloadProc(char *Fname)
 //					AddTransFileList(&Pkt);
 				{
 					if(MakeAllDir == YES)
-						MakeDirFromLocalPath(Pkt.LocalFile, Tmp);
+						MakeDirFromLocalPath(Pkt.Local, Tmp);
 					AddTransFileList(&Pkt);
 				}
 			}
@@ -351,14 +285,10 @@ void DirectDownloadProc(char *Fname)
 
 		if(AskNoFullPathMode() == YES)
 		{
-			strcpy(Pkt.Cmd, "BACKCUR");
-			strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
+			Pkt.Command = L"BACKCUR"s;
+			Pkt.Remote = AskRemoteCurDir();
 			AddTransFileList(&Pkt);
 		}
-
-		// 同時接続対応
-//		strcpy(Pkt.Cmd, "GOQUIT");
-//		AddTransFileList(&Pkt);
 
 		// バグ対策
 		AddNullTransFileList();
@@ -372,12 +302,6 @@ void DirectDownloadProc(char *Fname)
 }
 
 
-// 入力されたファイル名のファイルを一つダウンロードする
-void InputDownloadProc() {
-	if (char Path[FMAX_PATH + 1] = ""; InputDialog(downname_dlg, GetMainHwnd(), NULL, Path, FMAX_PATH))
-		DirectDownloadProc(Path);
-}
-
 struct MirrorList {
 	using result_t = bool;
 	Resizable<Controls<MIRROR_DEL, MIRROR_SIZEGRIP>, Controls<IDOK, IDCANCEL, IDHELP, MIRROR_DEL, MIRROR_COPYNUM, MIRROR_MAKENUM, MIRROR_DELNUM, MIRROR_SIZEGRIP, MIRROR_NO_TRANSFER>, Controls<MIRROR_LIST>> resizable{ MirrorDlgSize };
@@ -385,21 +309,21 @@ struct MirrorList {
 	MirrorList(std::forward_list<TRANSPACKET>& list) : list{ list } {}
 	INT_PTR OnInit(HWND hDlg) {
 		for (auto const& item : list) {
-			char Tmp[FMAX_PATH + 1 + 6] = "";
-			if (strncmp(item.Cmd, "R-DELE", 6) == 0 || strncmp(item.Cmd, "R-RMD", 5) == 0)
-				sprintf(Tmp, MSGJPN052, item.RemoteFile);
-			else if (strncmp(item.Cmd, "R-MKD", 5) == 0)
-				sprintf(Tmp, MSGJPN053, item.RemoteFile);
-			else if (strncmp(item.Cmd, "STOR", 4) == 0)
-				sprintf(Tmp, MSGJPN054, item.RemoteFile);
-			else if (strncmp(item.Cmd, "L-DELE", 6) == 0 || strncmp(item.Cmd, "L-RMD", 5) == 0)
-				sprintf(Tmp, MSGJPN055, item.LocalFile);
-			else if (strncmp(item.Cmd, "L-MKD", 5) == 0)
-				sprintf(Tmp, MSGJPN056, item.LocalFile);
-			else if (strncmp(item.Cmd, "RETR", 4) == 0)
-				sprintf(Tmp, MSGJPN057, item.LocalFile);
-			if (strlen(Tmp) > 0)
-				SendDlgItemMessageW(hDlg, MIRROR_LIST, LB_ADDSTRING, 0, (LPARAM)u8(Tmp).c_str());
+			std::wstring line;
+			if (item.Command.starts_with(L"R-DELE"sv) || item.Command.starts_with(L"R-RMD"sv))
+				line = strprintf(GetString(IDS_MSGJPN052).c_str(), item.Remote.c_str());
+			else if (item.Command.starts_with(L"R-MKD"sv))
+				line = strprintf(GetString(IDS_MSGJPN053).c_str(), item.Remote.c_str());
+			else if (item.Command.starts_with(L"STOR"sv))
+				line = strprintf(GetString(IDS_MSGJPN054).c_str(), item.Remote.c_str());
+			else if (item.Command.starts_with(L"L-DELE"sv) || item.Command.starts_with(L"L-RMD"sv))
+				line = strprintf(GetString(IDS_MSGJPN052).c_str(), item.Local.c_str());
+			else if (item.Command.starts_with(L"L-MKD"sv))
+				line = strprintf(GetString(IDS_MSGJPN053).c_str(), item.Local.c_str());
+			else if (item.Command.starts_with(L"RETR"sv))
+				line = strprintf(GetString(IDS_MSGJPN054).c_str(), item.Local.c_str());
+			if (!empty(line))
+				SendDlgItemMessageW(hDlg, MIRROR_LIST, LB_ADDSTRING, 0, (LPARAM)line.c_str());
 		}
 		CountMirrorFiles(hDlg, list);
 		EnableWindow(GetDlgItem(hDlg, MIRROR_DEL), FALSE);
@@ -429,7 +353,7 @@ struct MirrorList {
 			break;
 		case MIRROR_NO_TRANSFER:
 			for (auto& item : list)
-				if (strncmp(item.Cmd, "STOR", 4) == 0 || strncmp(item.Cmd, "RETR", 4) == 0)
+				if (item.Command.starts_with(L"STOR"sv) || item.Command.starts_with(L"RETR"sv))
 					item.NoTransfer = (int)SendDlgItemMessageW(hDlg, MIRROR_NO_TRANSFER, BM_GETCHECK, 0, 0);
 			break;
 		case IDHELP:
@@ -451,8 +375,6 @@ struct MirrorList {
 void MirrorDownloadProc(int Notify)
 {
 	TRANSPACKET Pkt;
-	char Name[FMAX_PATH+1];
-	char *Cat;
 	int Level;
 	int Mode;
 	// ファイル一覧バグ修正
@@ -483,17 +405,17 @@ void MirrorDownloadProc(int Notify)
 				f.Attr = YES;		/* RemotePos->Attrは転送するかどうかのフラグに使用 (YES/NO) */
 
 			for (auto LocalPos = begin(LocalListBase); LocalPos != end(LocalListBase);) {
-				if (AskMirrorNoTrn(LocalPos->File, 1) == NO) {
+				if (AskMirrorNoTrn(LocalPos->Name, 1) == NO) {
 					LocalPos->Attr = YES;
 					++LocalPos;
 				} else {
 					LocalPos->Attr = NO;	/* LocalPos->Attrは削除するかどうかのフラグに使用 (YES/NO) */
 
 					if (LocalPos->Node == NODE_DIR) {
-						Level = AskDirLevel(LocalPos->File);
+						Level = LocalPos->DirLevel();
 						++LocalPos;
 						while (LocalPos != end(LocalListBase)) {
-							if (LocalPos->Node == NODE_DIR && AskDirLevel(LocalPos->File) <= Level)
+							if (LocalPos->Node == NODE_DIR && LocalPos->DirLevel() <= Level)
 								break;
 							LocalPos->Attr = NO;
 							++LocalPos;
@@ -506,15 +428,9 @@ void MirrorDownloadProc(int Notify)
 			/*===== ファイルリスト比較 =====*/
 
 			for (auto RemotePos = begin(RemoteListBase); RemotePos != end(RemoteListBase);) {
-				if (AskMirrorNoTrn(RemotePos->File, 0) == NO) {
-					strcpy(Name, RemotePos->File);
-
-					if (MirrorFnameCnv == YES)
-						Mode = COMP_LOWERMATCH;
-					else
-						Mode = COMP_STRICT;
-
-					if (auto LocalPos = SearchFileList(Name, LocalListBase, Mode)) {
+				if (AskMirrorNoTrn(RemotePos->Name, 0) == NO) {
+					Mode = MirrorFnameCnv == YES ? COMP_LOWERMATCH : COMP_STRICT;
+					if (auto LocalPos = SearchFileList(RemotePos->Name, LocalListBase, Mode)) {
 						if ((RemotePos->Node == NODE_DIR) && (LocalPos->Node == NODE_DIR)) {
 							LocalPos->Attr = NO;
 							RemotePos->Attr = NO;
@@ -531,10 +447,10 @@ void MirrorDownloadProc(int Notify)
 						++RemotePos;
 					} else {
 						RemotePos->Attr = NO;
-						Level = AskDirLevel(RemotePos->File);
+						Level = RemotePos->DirLevel();
 						++RemotePos;
 						while (RemotePos != end(RemoteListBase)) {
-							if (RemotePos->Node == NODE_DIR && AskDirLevel(RemotePos->File) <= Level)
+							if (RemotePos->Node == NODE_DIR && RemotePos->DirLevel() <= Level)
 								break;
 							RemotePos->Attr = NO;
 							++RemotePos;
@@ -549,9 +465,9 @@ void MirrorDownloadProc(int Notify)
 
 			for (auto const& f : LocalListBase)
 				if (f.Attr == YES && f.Node == NODE_FILE) {
-					strcpy(Pkt.LocalFile, (AskLocalCurDir() / fs::u8path(f.File)).u8string().c_str());
-					strcpy(Pkt.RemoteFile, "");
-					strcpy(Pkt.Cmd, "L-DELE ");
+					Pkt.Local = AskLocalCurDir() / f.Name;
+					Pkt.Remote.clear();
+					Pkt.Command = L"L-DELE "s;
 					AddTmpTransFileList(Pkt, list);
 				}
 			MirrorDeleteAllLocalDir(LocalListBase, Pkt, list);
@@ -559,29 +475,21 @@ void MirrorDownloadProc(int Notify)
 
 			for (auto const& f : RemoteListBase)
 				if (f.Attr == YES) {
-					strcpy(Pkt.LocalFile, AskLocalCurDir().u8string().c_str());
-					SetYenTail(Pkt.LocalFile);
-					Cat = strchr(Pkt.LocalFile, NUL);
-					strcat(Pkt.LocalFile, f.File);
-
+					Pkt.Local = AskLocalCurDir();
+					auto name = f.Name;
 					if (MirrorFnameCnv == YES)
-						_strlwr(Cat);
-
-					RemoveAfterSemicolon(Cat);
-					ReplaceAll(Pkt.LocalFile, '/', '\\');
+						name = lc(name);
+					Pkt.Local /= RemoveAfterSemicolon(std::move(name));
 
 					if (f.Node == NODE_DIR) {
-						strcpy(Pkt.RemoteFile, "");
-						strcpy(Pkt.Cmd, "L-MKD ");
+						Pkt.Remote.clear();
+						Pkt.Command = L"L-MKD "s;
 						AddTmpTransFileList(Pkt, list);
 					} else if (f.Node == NODE_FILE) {
-						strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
-						SetSlashTail(Pkt.RemoteFile);
-						strcat(Pkt.RemoteFile, f.File);
-						ReplaceAll(Pkt.RemoteFile, '\\', '/');
+						Pkt.Remote = ReplaceAll(SetSlashTail(std::wstring{ AskRemoteCurDir() }) + f.Name, L'\\', L'/');
 
-						strcpy(Pkt.Cmd, "RETR ");
-						Pkt.Type = AskTransferTypeAssoc(Pkt.RemoteFile, AskTransferType());
+						Pkt.Command = L"RETR "s;
+						Pkt.Type = AskTransferTypeAssoc(Pkt.Remote, AskTransferType());
 						Pkt.Size = f.Size;
 						Pkt.Time = f.Time;
 						Pkt.KanjiCode = AskHostKanjiCode();
@@ -599,22 +507,18 @@ void MirrorDownloadProc(int Notify)
 			{
 				if(AskNoFullPathMode() == YES)
 				{
-					strcpy(Pkt.Cmd, "SETCUR");
-					strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
+					Pkt.Command = L"SETCUR"s;
+					Pkt.Remote = AskRemoteCurDir();
 					AddTransFileList(&Pkt);
 				}
 				AppendTransFileList(std::move(list));
 
 				if(AskNoFullPathMode() == YES)
 				{
-					strcpy(Pkt.Cmd, "BACKCUR");
-					strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
+					Pkt.Command = L"BACKCUR"s;
+					Pkt.Remote = AskRemoteCurDir();
 					AddTransFileList(&Pkt);
 				}
-
-				// 同時接続対応
-//				strcpy(Pkt.Cmd, "GOQUIT");
-//				AddTransFileList(&Pkt);
 			}
 
 			// バグ対策
@@ -629,44 +533,24 @@ void MirrorDownloadProc(int Notify)
 }
 
 
-/*----- ミラーリングのファイル一覧を表示 --------------------------------------
-*
-*	Parameter
-*		FILELIST *Local : ローカル側
-*		FILELIST *Remote : リモート側
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-static void DispMirrorFiles(std::vector<FILELIST> const& Local, std::vector<FILELIST> const& Remote)
-{
-	char Date[80];
-	SYSTEMTIME sTime;
-	FILETIME fTime;
-
-	if(DebugConsole == YES)
-	{
-		DoPrintf("---- MIRROR FILE LIST ----");
-		for (auto const& f : Local) {
-			FileTimeToLocalFileTime(&f.Time, &fTime);
-			if (FileTimeToSystemTime(&fTime, &sTime))
-				sprintf(Date, "%04d/%02d/%02d %02d:%02d:%02d.%04d", sTime.wYear, sTime.wMonth, sTime.wDay, sTime.wHour, sTime.wMinute, sTime.wSecond, sTime.wMilliseconds);
-			else
-				strcpy(Date, "");
-			DoPrintf("LOCAL  : %s %s [%s] %s", f.Attr == 1 ? "YES" : "NO ", f.Node == NODE_DIR ? "DIR " : "FILE", Date, f.File);
-		}
-		for (auto const& f : Remote) {
-			FileTimeToLocalFileTime(&f.Time, &fTime);
-			if (FileTimeToSystemTime(&fTime, &sTime))
-				sprintf(Date, "%04d/%02d/%02d %02d:%02d:%02d.%04d", sTime.wYear, sTime.wMonth, sTime.wDay, sTime.wHour, sTime.wMinute, sTime.wSecond, sTime.wMilliseconds);
-			else
-				strcpy(Date, "");
-			DoPrintf("REMOTE : %s %s [%s] %s", f.Attr == 1 ? "YES" : "NO ", f.Node == NODE_DIR ? "DIR " : "FILE", Date, f.File);
-		}
-		DoPrintf("---- END ----");
+// ミラーリングのファイル一覧を表示
+static void DispMirrorFiles(std::vector<FILELIST> const& Local, std::vector<FILELIST> const& Remote) {
+	if (DebugConsole != YES)
+		return;
+	FILETIME ft;
+	SYSTEMTIME st;
+	Debug(L"---- MIRROR FILE LIST ----"sv);
+	for (auto const& f : Local) {
+		FileTimeToLocalFileTime(&f.Time, &ft);
+		auto const date = FileTimeToSystemTime(&ft, &st) ? strprintf(L"%04d/%02d/%02d %02d:%02d:%02d.%04d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds) : L""s;
+		Debug(L"LOCAL  : {} {} [{}] {}"sv, f.Attr == 1 ? L"YES"sv : L"NO "sv, f.Node == NODE_DIR ? L"DIR "sv : L"FILE"sv, date, f.Name);
 	}
-	return;
+	for (auto const& f : Remote) {
+		FileTimeToLocalFileTime(&f.Time, &ft);
+		auto const date = FileTimeToSystemTime(&ft, &st) ? strprintf(L"%04d/%02d/%02d %02d:%02d:%02d.%04d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, st.wMilliseconds) : L""s;
+		Debug(L"REMOTE : {} {} [{}] {}"sv, f.Attr == 1 ? L"YES"sv : L"NO "sv, f.Node == NODE_DIR ? L"DIR "sv : L"FILE"sv, date, f.Name);
+	}
+	Debug(L"---- END ----"sv);
 }
 
 
@@ -674,37 +558,20 @@ static void DispMirrorFiles(std::vector<FILELIST> const& Local, std::vector<FILE
 static void MirrorDeleteAllLocalDir(std::vector<FILELIST> const& Local, TRANSPACKET& item, std::forward_list<TRANSPACKET>& list) {
 	for (auto it = rbegin(Local); it != rend(Local); ++it)
 		if (it->Node == NODE_DIR && it->Attr == YES) {
-			strcpy(item.LocalFile, (AskLocalCurDir() / fs::u8path(it->File)).u8string().c_str());
-			strcpy(item.RemoteFile, "");
-			strcpy(item.Cmd, "L-RMD ");
+			item.Local = AskLocalCurDir() / it->Name;
+			item.Remote.clear();
+			item.Command = L"L-RMD "s;
 			AddTmpTransFileList(item, list);
 		}
 }
 
 
-/*----- ファイル名のセミコロン以降を取り除く ----------------------------------
-*
-*	Parameter
-*		char *Path : ファイル名
-*
-*	Return Value
-*		なし
-*
-*	Note
-*		Pathの内容が書き換えられる
-*		オプション設定によって処理を切替える
-*----------------------------------------------------------------------------*/
-
-static void RemoveAfterSemicolon(char *Path)
-{
-	char *Pos;
-
-	if(VaxSemicolon == YES)
-	{
-		if((Pos = strchr(Path, ';')) != NULL)
-			*Pos = NUL;
-	}
-	return;
+// ファイル名のセミコロン以降を取り除く
+static std::wstring RemoveAfterSemicolon(std::wstring&& path) {
+	if (VaxSemicolon == YES)
+		if (auto const pos = path.find(';'); pos != std::wstring::npos)
+			path.resize(pos);
+	return path;
 }
 
 
@@ -730,7 +597,7 @@ static int CheckLocalFile(TRANSPACKET *Pkt)
 		DownExistDialog(TRANSPACKET* Pkt) : Pkt{ Pkt } {}
 		INT_PTR OnInit(HWND hDlg) {
 			SendDlgItemMessageW(hDlg, DOWN_EXIST_NAME, EM_LIMITTEXT, FMAX_PATH, 0);
-			SetText(hDlg, DOWN_EXIST_NAME, u8(Pkt->LocalFile));
+			SetText(hDlg, DOWN_EXIST_NAME, Pkt->Local);
 			if (Pkt->Type == TYPE_A || Pkt->ExistSize <= 0)
 				EnableWindow(GetDlgItem(hDlg, DOWN_EXIST_RESUME), FALSE);
 			DownExistButton::Set(hDlg, ExistMode);
@@ -743,7 +610,7 @@ static int CheckLocalFile(TRANSPACKET *Pkt)
 				[[fallthrough]];
 			case IDOK:
 				ExistMode = DownExistButton::Get(hDlg);
-				strncpy_s(Pkt->LocalFile, FMAX_PATH, u8(GetText(hDlg, DOWN_EXIST_NAME)).c_str(), _TRUNCATE);
+				Pkt->Local = GetText(hDlg, DOWN_EXIST_NAME);
 				EndDialog(hDlg, true);
 				break;
 			case IDCANCEL:
@@ -763,13 +630,13 @@ static int CheckLocalFile(TRANSPACKET *Pkt)
 	Pkt->ExistSize = 0;
 	if(RecvMode != TRANS_OVW)
 	{
-		if (WIN32_FILE_ATTRIBUTE_DATA attr; GetFileAttributesExW(fs::u8path(Pkt->LocalFile).c_str(), GetFileExInfoStandard, &attr))
+		if (WIN32_FILE_ATTRIBUTE_DATA attr; GetFileAttributesExW(Pkt->Local.c_str(), GetFileExInfoStandard, &attr))
 		{
 			Pkt->ExistSize = LONGLONG(attr.nFileSizeHigh) << 32 | attr.nFileSizeLow;
 
 			if(ExistNotify == YES)
 			{
-				SoundPlay(SND_ERROR);
+				Sound::Error.Play();
 				Ret = Dialog(GetFtpInst(), down_exist_dlg, GetMainHwnd(), DownExistDialog{ Pkt }) ? ExistMode : EXIST_ABORT;
 			}
 			else
@@ -812,65 +679,38 @@ static int CheckLocalFile(TRANSPACKET *Pkt)
 
 // ディレクトリ自動作成
 // リモート側のパスから必要なディレクトリを作成
-int MakeDirFromRemotePath(char* RemoteFile, char* Old, int FirstAdd)
-{
+int MakeDirFromRemotePath(fs::path const& RemoteFile, fs::path const& Old, int FirstAdd) {
+	fs::path path;
+	auto rit = RemoteFile.begin(), rend = RemoteFile.end();
+	for (auto oit = Old.begin(), oend = Old.end(); rit != rend && oit != oend && *rit == *oit; ++rit, ++oit)
+		path /= *rit;
+	if (rit == rend)
+		return NO;
 	TRANSPACKET Pkt;
-	TRANSPACKET Pkt1;
-	char* pDelimiter;
-	char* pNext;
-	char* Cat;
-	size_t Len;
-	int Make;
-	pDelimiter = RemoteFile;
-	Make = NO;
-	while(pNext = strchr(pDelimiter, '/'))
-	{
-		Len = pNext - RemoteFile;
-		strncpy(Pkt.RemoteFile, RemoteFile, Len);
-		Pkt.RemoteFile[Len] = '\0';
-		if(strncmp(RemoteFile, Old, Len + 1) != 0)
-		{
-			Cat = Pkt.RemoteFile + (pDelimiter - RemoteFile);
-			if(FnameCnv == FNAME_LOWER)
-				_strlwr(Cat);
-			else if(FnameCnv == FNAME_UPPER)
-				_strupr(Cat);
-#if defined(HAVE_TANDEM)
-			Pkt.FileCode = 0;
-			Pkt.PriExt = DEF_PRIEXT;
-			Pkt.SecExt = DEF_SECEXT;
-			Pkt.MaxExt = DEF_MAXEXT;
-#endif
-			ReplaceAll(Pkt.RemoteFile, '\\', '/');
-
-			if(AskHostType() == HTYPE_ACOS)
-			{
-				strcpy(Pkt.RemoteFile, "'");
-				strcat(Pkt.RemoteFile, AskHostLsName().c_str());
-				strcat(Pkt.RemoteFile, "(");
-				strcat(Pkt.RemoteFile, Cat);
-				strcat(Pkt.RemoteFile, ")");
-				strcat(Pkt.RemoteFile, "'");
-			}
-			else if(AskHostType() == HTYPE_ACOS_4)
-				strcpy(Pkt.RemoteFile, Cat);
-
-			if((FirstAdd == YES) && (AskNoFullPathMode() == YES))
-			{
-				strcpy(Pkt1.Cmd, "SETCUR");
-				strcpy(Pkt1.RemoteFile, u8(AskRemoteCurDir()).c_str());
-				AddTransFileList(&Pkt1);
-			}
-			FirstAdd = NO;
-			strcpy(Pkt.Cmd, "MKD ");
-			strcpy(Pkt.LocalFile, "");
-			AddTransFileList(&Pkt);
-
-			Make = YES;
-		}
-		pDelimiter = pNext + 1;
+	if (FirstAdd == YES && AskNoFullPathMode() == YES) {
+		Pkt.Command = L"SETCUR"s;
+		Pkt.Remote = AskRemoteCurDir();
+		AddTransFileList(&Pkt);
 	}
-	return Make;
+	do {
+		auto name = rit->native();
+		if (FnameCnv == FNAME_LOWER)
+			_wcslwr(data(name));
+		else if (FnameCnv == FNAME_UPPER)
+			_wcsupr(data(name));
+		path /= name;
+#if defined(HAVE_TANDEM)
+		Pkt.FileCode = 0;
+		Pkt.PriExt = DEF_PRIEXT;
+		Pkt.SecExt = DEF_SECEXT;
+		Pkt.MaxExt = DEF_MAXEXT;
+#endif
+		Pkt.Remote = AskHostType() == HTYPE_ACOS ? std::format(L"'{}({})'"sv, AskHostLsName(), name) : AskHostType() == HTYPE_ACOS_4 ? name : path.generic_wstring();
+		Pkt.Command = L"MKD "s;
+		Pkt.Local.clear();
+		AddTransFileList(&Pkt);
+	} while (++rit != rend);
+	return YES;
 }
 
 void UploadListProc(int ChName, int All)
@@ -878,14 +718,15 @@ void UploadListProc(int ChName, int All)
 #if defined(HAVE_TANDEM)
 	struct UpDownAsWithExt {
 		using result_t = bool;
+		std::wstring name;
 		int win;
 		int filecode;
-		UpDownAsWithExt(int win) : win{ win }, filecode{} {}
+		UpDownAsWithExt(std::wstring_view name, int win) : name{ name }, win{ win }, filecode{} {}
 		INT_PTR OnInit(HWND hDlg) {
 			SetText(hDlg, GetString(win == WIN_LOCAL ? IDS_MSGJPN064 : IDS_MSGJPN065));
 			SendDlgItemMessageW(hDlg, UPDOWNAS_NEW, EM_LIMITTEXT, FMAX_PATH, 0);
-			SetText(hDlg, UPDOWNAS_NEW, u8(TmpString));
-			SetText(hDlg, UPDOWNAS_TEXT, u8(TmpString));
+			SetText(hDlg, UPDOWNAS_NEW, name);
+			SetText(hDlg, UPDOWNAS_TEXT, name);
 			SendDlgItemMessageW(hDlg, UPDOWNAS_FILECODE, EM_LIMITTEXT, 4, 0);
 			SetText(hDlg, UPDOWNAS_FILECODE, L"0");
 			return TRUE;
@@ -893,7 +734,7 @@ void UploadListProc(int ChName, int All)
 		void OnCommand(HWND hDlg, WORD id) {
 			switch (id) {
 			case IDOK:
-				strncpy_s(TmpString, FMAX_PATH, u8(GetText(hDlg, UPDOWNAS_NEW)).c_str(), _TRUNCATE);
+				name = GetText(hDlg, UPDOWNAS_NEW);
 				filecode = GetDecimalText(hDlg, UPDOWNAS_FILECODE);
 				EndDialog(hDlg, true);
 				break;
@@ -906,8 +747,6 @@ void UploadListProc(int ChName, int All)
 #endif
 	TRANSPACKET Pkt;
 	TRANSPACKET Pkt1;
-	char *Cat;
-	char Tmp[FMAX_PATH+1];
 	int FirstAdd;
 	// ファイル一覧バグ修正
 	int ListSts;
@@ -926,7 +765,7 @@ void UploadListProc(int ChName, int All)
 		// 現在ホスト側のファイル一覧に表示されているものをRemoteListに登録
 		// 同名ファイルチェック用
 		std::vector<FILELIST> RemoteList;
-		AddRemoteTreeToFileList(0, "", RDIR_NONE, RemoteList);
+		AddRemoteTreeToFileList(0, {}, RDIR_NONE, RemoteList);
 
 		FirstAdd = YES;
 		ExistNotify = YES;
@@ -935,15 +774,10 @@ void UploadListProc(int ChName, int All)
 			// ファイル一覧バグ修正
 			if((AbortOnListError == YES) && (ListSts == FFFTP_FAIL))
 				break;
-			strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
-			SetSlashTail(Pkt.RemoteFile);
-			Cat = strchr(Pkt.RemoteFile, NUL);
+			Pkt.Remote = SetSlashTail(std::wstring{ AskRemoteCurDir() });
+			auto offset = size(Pkt.Remote);
 			if (ChName == NO || f.Node == NODE_DIR) {
-				strcat(Pkt.RemoteFile, f.File);
-				if(FnameCnv == FNAME_LOWER)
-					_strlwr(Cat);
-				else if(FnameCnv == FNAME_UPPER)
-					_strupr(Cat);
+				Pkt.Remote += FnameCnv == FNAME_LOWER ? lc(f.Name) : FnameCnv == FNAME_UPPER ? uc(f.Name) : f.Name;
 #if defined(HAVE_TANDEM)
 				Pkt.FileCode = 0;
 				Pkt.PriExt = DEF_PRIEXT;
@@ -954,44 +788,32 @@ void UploadListProc(int ChName, int All)
 			else
 			{
 				// 名前を変更する
-				strcpy(TmpString, f.File);
 #if defined(HAVE_TANDEM)
 				if(AskHostType() == HTYPE_TANDEM && AskOSS() == NO) {
-					UpDownAsWithExt data{ WIN_LOCAL };
+					UpDownAsWithExt data{ f.Name, WIN_LOCAL };
 					if (!Dialog(GetFtpInst(), updown_as_with_ext_dlg, GetMainHwnd(), data))
 						break;
-					strcat(Pkt.RemoteFile, TmpString);
+					Pkt.Remote += data.name;
 					Pkt.FileCode = data.filecode;
 				} else
 #endif
-				if (UpDownAsDialog(WIN_LOCAL))
-					strcat(Pkt.RemoteFile, TmpString);
+				if (std::wstring name = f.Name; UpDownAsDialog(name, WIN_LOCAL))
+					Pkt.Remote += name;
 				else
 					break;
 			}
-			// バグ修正
-			strcpy(Tmp, u8(AskRemoteCurDir()).c_str());
-			SetSlashTail(Tmp);
-			if(strncmp(Pkt.RemoteFile, Tmp, strlen(Tmp)) != 0)
-			{
-				if((Cat = strrchr(Pkt.RemoteFile, '/')) != NULL)
-					Cat++;
+			if (Pkt.Remote.starts_with(SetSlashTail(std::wstring{ AskRemoteCurDir() }))) {
+				if (offset = Pkt.Remote.rfind(L'/'); offset != std::wstring::npos)
+					offset++;
 				else
-					Cat = Pkt.RemoteFile;
+					offset = 0;
 			}
-			ReplaceAll(Pkt.RemoteFile, '\\', '/');
+			Pkt.Remote = ReplaceAll(std::move(Pkt.Remote), L'\\', L'/');
 
-			if(AskHostType() == HTYPE_ACOS)
-			{
-				strcpy(Pkt.RemoteFile, "'");
-				strcat(Pkt.RemoteFile, AskHostLsName().c_str());
-				strcat(Pkt.RemoteFile, "(");
-				strcat(Pkt.RemoteFile, Cat);
-				strcat(Pkt.RemoteFile, ")");
-				strcat(Pkt.RemoteFile, "'");
-			}
-			else if(AskHostType() == HTYPE_ACOS_4)
-				strcpy(Pkt.RemoteFile, Cat);
+			if (AskHostType() == HTYPE_ACOS)
+				Pkt.Remote = std::format(L"'{}({})'"sv, AskHostLsName(), std::wstring_view{ Pkt.Remote }.substr(offset));
+			else if (AskHostType() == HTYPE_ACOS_4)
+				Pkt.Remote = Pkt.Remote.substr(offset);
 
 			if(f.Node == NODE_DIR)
 			{
@@ -1001,11 +823,11 @@ void UploadListProc(int ChName, int All)
 				// 同名ファイルチェック用
 				RemoteList.clear();
 
-				strcpy(Tmp, u8(AskRemoteCurDir()).c_str());
-				if(DoCWD(Pkt.RemoteFile, NO, NO, NO) == FTP_COMPLETE)
+				auto const Tmp = AskRemoteCurDir();
+				if(DoCWD(Pkt.Remote, NO, NO, NO) == FTP_COMPLETE)
 				{
-					if(DoDirListCmdSkt("", "", 998, &CancelFlg) == FTP_COMPLETE)
-						AddRemoteTreeToFileList(998, "", RDIR_NONE, RemoteList);
+					if(DoDirList(L""sv, 998, &CancelFlg) == FTP_COMPLETE)
+						AddRemoteTreeToFileList(998, {}, RDIR_NONE, RemoteList);
 					DoCWD(Tmp, NO, NO, NO);
 				}
 				else
@@ -1013,26 +835,26 @@ void UploadListProc(int ChName, int All)
 					// フォルダを作成
 					if((FirstAdd == YES) && (AskNoFullPathMode() == YES))
 					{
-						strcpy(Pkt1.Cmd, "SETCUR");
-						strcpy(Pkt1.RemoteFile, u8(AskRemoteCurDir()).c_str());
+						Pkt1.Command = L"SETCUR"s;
+						Pkt1.Remote = AskRemoteCurDir();
 						AddTransFileList(&Pkt1);
 					}
 					FirstAdd = NO;
-					strcpy(Pkt.Cmd, "MKD ");
-					strcpy(Pkt.LocalFile, "");
+					Pkt.Command = L"MKD "s;
+					Pkt.Local.clear();
 					AddTransFileList(&Pkt);
 				}
 			}
 			else if(f.Node == NODE_FILE)
 			{
 				// ファイルの場合
-				strcpy(Pkt.LocalFile, (AskLocalCurDir() / fs::u8path(f.File)).u8string().c_str());
+				Pkt.Local = AskLocalCurDir() / f.Name;
 
-				strcpy(Pkt.Cmd, "STOR ");
-				Pkt.Type = AskTransferTypeAssoc(Pkt.LocalFile, AskTransferType());
+				Pkt.Command = L"STOR "s;
+				Pkt.Type = AskTransferTypeAssoc(Pkt.Local.native(), AskTransferType());
 				Pkt.Size = f.Size;
 				Pkt.Time = f.Time;
-				Pkt.Attr = AskUploadFileAttr(Pkt.RemoteFile);
+				Pkt.Attr = AskUploadFileAttr(Pkt.Remote);
 				Pkt.KanjiCode = AskHostKanjiCode();
 				// UTF-8対応
 				Pkt.KanjiCodeDesired = AskLocalKanjiCode();
@@ -1042,8 +864,7 @@ void UploadListProc(int ChName, int All)
 					CalcExtentSize(&Pkt, f.Size);
 				}
 #endif
-				// ディレクトリ自動作成
-				strcpy(Tmp, Pkt.RemoteFile);
+				auto dir = Pkt.Remote;
 				Pkt.Mode = CheckRemoteFile(&Pkt, RemoteList);
 				// ミラーリング設定追加
 				Pkt.NoTransfer = NO;
@@ -1054,13 +875,13 @@ void UploadListProc(int ChName, int All)
 					// ディレクトリ自動作成
 					if(MakeAllDir == YES)
 					{
-						if(MakeDirFromRemotePath(Pkt.RemoteFile, Tmp, FirstAdd) == YES)
+						if(MakeDirFromRemotePath(Pkt.Remote, dir, FirstAdd) == YES)
 							FirstAdd = NO;
 					}
 					if((FirstAdd == YES) && (AskNoFullPathMode() == YES))
 					{
-						strcpy(Pkt1.Cmd, "SETCUR");
-						strcpy(Pkt1.RemoteFile, u8(AskRemoteCurDir()).c_str());
+						Pkt1.Command = L"SETCUR"s;
+						Pkt1.Remote = AskRemoteCurDir();
 						AddTransFileList(&Pkt1);
 					}
 					FirstAdd = NO;
@@ -1071,8 +892,8 @@ void UploadListProc(int ChName, int All)
 
 		if((FirstAdd == NO) && (AskNoFullPathMode() == YES))
 		{
-			strcpy(Pkt.Cmd, "BACKCUR");
-			strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
+			Pkt.Command = L"BACKCUR"s;
+			Pkt.Remote = AskRemoteCurDir();
 			AddTransFileList(&Pkt);
 		}
 
@@ -1100,10 +921,7 @@ void UploadDragProc(WPARAM wParam)
 {
 	TRANSPACKET Pkt;
 	TRANSPACKET Pkt1;
-	char *Cat;
-	char Tmp[FMAX_PATH+1];
 	int FirstAdd;
-	char Cur[FMAX_PATH+1];
 
 	// 同時接続対応
 	CancelFlg = NO;
@@ -1113,46 +931,32 @@ void UploadDragProc(WPARAM wParam)
 		DisableUserOpe();
 
 		// ローカル側で選ばれているファイルをFileListBaseに登録
-		std::vector<FILELIST> FileListBase;
-		MakeDroppedFileList(wParam, Cur, FileListBase);
+		auto [cur, files] = MakeDroppedFileList(wParam);
 
 		// 現在ホスト側のファイル一覧に表示されているものをRemoteListに登録
 		// 同名ファイルチェック用
 		std::vector<FILELIST> RemoteList;
-		AddRemoteTreeToFileList(0, "", RDIR_NONE, RemoteList);
+		AddRemoteTreeToFileList(0, {}, RDIR_NONE, RemoteList);
 
 		FirstAdd = YES;
 		ExistNotify = YES;
 
-		for (auto const& f : FileListBase) {
-			strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
-			SetSlashTail(Pkt.RemoteFile);
-			Cat = strchr(Pkt.RemoteFile, NUL);
-
-			strcat(Pkt.RemoteFile, f.File);
+		for (auto const& f : files) {
+			auto Cat = f.Name;
 			if(FnameCnv == FNAME_LOWER)
-				_strlwr(Cat);
+				Cat = lc(std::move(Cat));
 			else if(FnameCnv == FNAME_UPPER)
-				_strupr(Cat);
-			ReplaceAll(Pkt.RemoteFile, '\\', '/');
+				Cat = uc(std::move(Cat));
+			Pkt.Remote
+				= AskHostType() == HTYPE_ACOS ? std::format(L"'{}({})'"sv, AskHostLsName(), Cat)
+				: AskHostType() == HTYPE_ACOS_4 ? std::move(Cat)
+				: ReplaceAll(SetSlashTail(std::wstring{ AskRemoteCurDir() }) + Cat, L'\\', L'/');
 #if defined(HAVE_TANDEM)
 			Pkt.FileCode = 0;
 			Pkt.PriExt = DEF_PRIEXT;
 			Pkt.SecExt = DEF_SECEXT;
 			Pkt.MaxExt = DEF_MAXEXT;
 #endif
-
-			if(AskHostType() == HTYPE_ACOS)
-			{
-				strcpy(Pkt.RemoteFile, "'");
-				strcat(Pkt.RemoteFile, AskHostLsName().c_str());
-				strcat(Pkt.RemoteFile, "(");
-				strcat(Pkt.RemoteFile, Cat);
-				strcat(Pkt.RemoteFile, ")");
-				strcat(Pkt.RemoteFile, "'");
-			}
-			else if(AskHostType() == HTYPE_ACOS_4)
-				strcpy(Pkt.RemoteFile, Cat);
 
 			if(f.Node == NODE_DIR)
 			{
@@ -1162,40 +966,37 @@ void UploadDragProc(WPARAM wParam)
 				// 同名ファイルチェック用
 				RemoteList.clear();
 
-				strcpy(Tmp, u8(AskRemoteCurDir()).c_str());
-				if(DoCWD(Pkt.RemoteFile, NO, NO, NO) == FTP_COMPLETE)
+				auto const Tmp = AskRemoteCurDir();
+				if(DoCWD(Pkt.Remote, NO, NO, NO) == FTP_COMPLETE)
 				{
-					if(DoDirListCmdSkt("", "", 998, &CancelFlg) == FTP_COMPLETE)
-						AddRemoteTreeToFileList(998, "", RDIR_NONE, RemoteList);
+					if(DoDirList(L""sv, 998, &CancelFlg) == FTP_COMPLETE)
+						AddRemoteTreeToFileList(998, {}, RDIR_NONE, RemoteList);
 					DoCWD(Tmp, NO, NO, NO);
 				}
 				else
 				{
 					if((FirstAdd == YES) && (AskNoFullPathMode() == YES))
 					{
-						strcpy(Pkt1.Cmd, "SETCUR");
-						strcpy(Pkt1.RemoteFile, u8(AskRemoteCurDir()).c_str());
+						Pkt1.Command = L"SETCUR"s;
+						Pkt1.Remote = AskRemoteCurDir();
 						AddTransFileList(&Pkt1);
 					}
 					FirstAdd = NO;
-					strcpy(Pkt.Cmd, "MKD ");
-					strcpy(Pkt.LocalFile, "");
+					Pkt.Command = L"MKD "s;
+					Pkt.Local.clear();
 					AddTransFileList(&Pkt);
 				}
 			}
 			else if(f.Node == NODE_FILE)
 			{
 				// ファイルの場合
-				strcpy(Pkt.LocalFile, Cur);
-				SetYenTail(Pkt.LocalFile);
-				strcat(Pkt.LocalFile, f.File);
-				ReplaceAll(Pkt.LocalFile, '/', '\\');
+				Pkt.Local = cur / f.Name;
 
-				strcpy(Pkt.Cmd, "STOR ");
-				Pkt.Type = AskTransferTypeAssoc(Pkt.LocalFile, AskTransferType());
+				Pkt.Command = L"STOR "s;
+				Pkt.Type = AskTransferTypeAssoc(Pkt.Local.native(), AskTransferType());
 				Pkt.Size = f.Size;
 				Pkt.Time = f.Time;
-				Pkt.Attr = AskUploadFileAttr(Pkt.RemoteFile);
+				Pkt.Attr = AskUploadFileAttr(Pkt.Remote);
 				Pkt.KanjiCode = AskHostKanjiCode();
 				// UTF-8対応
 				Pkt.KanjiCodeDesired = AskLocalKanjiCode();
@@ -1207,7 +1008,7 @@ void UploadDragProc(WPARAM wParam)
 				}
 #endif
 				// ディレクトリ自動作成
-				strcpy(Tmp, Pkt.RemoteFile);
+				auto dir = Pkt.Remote;
 				Pkt.Mode = CheckRemoteFile(&Pkt, RemoteList);
 				// ミラーリング設定追加
 				Pkt.NoTransfer = NO;
@@ -1218,13 +1019,13 @@ void UploadDragProc(WPARAM wParam)
 					// ディレクトリ自動作成
 					if(MakeAllDir == YES)
 					{
-						if(MakeDirFromRemotePath(Pkt.RemoteFile, Tmp, FirstAdd) == YES)
+						if(MakeDirFromRemotePath(Pkt.Remote, dir, FirstAdd) == YES)
 							FirstAdd = NO;
 					}
 					if((FirstAdd == YES) && (AskNoFullPathMode() == YES))
 					{
-						strcpy(Pkt1.Cmd, "SETCUR");
-						strcpy(Pkt1.RemoteFile, u8(AskRemoteCurDir()).c_str());
+						Pkt1.Command = L"SETCUR"s;
+						Pkt1.Remote = AskRemoteCurDir();
 						AddTransFileList(&Pkt1);
 					}
 					FirstAdd = NO;
@@ -1235,8 +1036,8 @@ void UploadDragProc(WPARAM wParam)
 
 		if((FirstAdd == NO) && (AskNoFullPathMode() == YES))
 		{
-			strcpy(Pkt.Cmd, "BACKCUR");
-			strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
+			Pkt.Command = L"BACKCUR"s;
+			Pkt.Remote = AskRemoteCurDir();
 			AddTransFileList(&Pkt);
 		}
 
@@ -1263,8 +1064,6 @@ void UploadDragProc(WPARAM wParam)
 void MirrorUploadProc(int Notify)
 {
 	TRANSPACKET Pkt;
-	char Name[FMAX_PATH+1];
-	char *Cat;
 	int Level;
 	int Mode;
 	SYSTEMTIME TmpStime;
@@ -1298,17 +1097,17 @@ void MirrorUploadProc(int Notify)
 				lf.Attr = YES;		/* LocalPos->Attrは転送するかどうかのフラグに使用 (YES/NO) */
 
 			for (auto RemotePos = begin(RemoteListBase); RemotePos != end(RemoteListBase);) {
-				if (AskMirrorNoTrn(RemotePos->File, 1) == NO) {
+				if (AskMirrorNoTrn(RemotePos->Name, 1) == NO) {
 					RemotePos->Attr = YES;
 					++RemotePos;
 				} else {
 					RemotePos->Attr = NO;	/* RemotePos->Attrは削除するかどうかのフラグに使用 (YES/NO) */
 
 					if (RemotePos->Node == NODE_DIR) {
-						Level = AskDirLevel(RemotePos->File);
+						Level = RemotePos->DirLevel();
 						++RemotePos;
 						while (RemotePos != end(RemoteListBase)) {
-							if (RemotePos->Node == NODE_DIR && AskDirLevel(RemotePos->File) <= Level)
+							if (RemotePos->Node == NODE_DIR && RemotePos->DirLevel() <= Level)
 								break;
 							RemotePos->Attr = NO;
 							++RemotePos;
@@ -1321,24 +1120,18 @@ void MirrorUploadProc(int Notify)
 			/*===== ファイルリスト比較 =====*/
 
 			for (auto LocalPos = begin(LocalListBase); LocalPos != end(LocalListBase);) {
-				if (AskMirrorNoTrn(LocalPos->File, 0) == NO) {
-					strcpy(Name, LocalPos->File);
-					ReplaceAll(Name, '\\', '/');
-
-					if (MirrorFnameCnv == YES)
-						Mode = COMP_LOWERMATCH;
-					else
-						Mode = COMP_STRICT;
-
+				if (AskMirrorNoTrn(LocalPos->Name, 0) == NO) {
+					auto const name = ReplaceAll(std::wstring{ LocalPos->Name }, L'\\', L'/');
+					Mode = MirrorFnameCnv == YES ? COMP_LOWERMATCH : COMP_STRICT;
 					if (LocalPos->Node == NODE_DIR) {
-						if (auto RemotePos = SearchFileList(Name, RemoteListBase, Mode)) {
+						if (auto RemotePos = SearchFileList(name, RemoteListBase, Mode)) {
 							if (RemotePos->Node == NODE_DIR) {
 								RemotePos->Attr = NO;
 								LocalPos->Attr = NO;
 							}
 						}
 					} else if (LocalPos->Node == NODE_FILE) {
-						if (auto RemotePos = SearchFileList(Name, RemoteListBase, Mode)) {
+						if (auto RemotePos = SearchFileList(name, RemoteListBase, Mode)) {
 							if (RemotePos->Node == NODE_FILE) {
 								FileTimeToLocalFileTime(&LocalPos->Time, &TmpFtimeL);
 								FileTimeToLocalFileTime(&RemotePos->Time, &TmpFtimeR);
@@ -1373,10 +1166,10 @@ void MirrorUploadProc(int Notify)
 						++LocalPos;
 					} else {
 						LocalPos->Attr = NO;
-						Level = AskDirLevel(LocalPos->File);
+						Level = LocalPos->DirLevel();
 						++LocalPos;
 						while (LocalPos != end(LocalListBase)) {
-							if (LocalPos->Node == NODE_DIR && AskDirLevel(LocalPos->File) <= Level)
+							if (LocalPos->Node == NODE_DIR && LocalPos->DirLevel() <= Level)
 								break;
 							LocalPos->Attr = NO;
 							++LocalPos;
@@ -1391,40 +1184,30 @@ void MirrorUploadProc(int Notify)
 
 			for (auto const& f : RemoteListBase)
 				if (f.Attr == YES && f.Node == NODE_FILE) {
-					strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
-					SetSlashTail(Pkt.RemoteFile);
-					strcat(Pkt.RemoteFile, f.File);
-					ReplaceAll(Pkt.RemoteFile, '\\', '/');
-					strcpy(Pkt.LocalFile, "");
-					strcpy(Pkt.Cmd, "R-DELE ");
+					Pkt.Remote = ReplaceAll(SetSlashTail(std::wstring{ AskRemoteCurDir() }) + f.Name, L'\\', L'/');
+					Pkt.Local.clear();
+					Pkt.Command = L"R-DELE "s;
 					AddTmpTransFileList(Pkt, list);
 				}
 			MirrorDeleteAllDir(RemoteListBase, Pkt, list);
 
 			for (auto const& f : LocalListBase) {
 				if (f.Attr == YES) {
-					strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
-					SetSlashTail(Pkt.RemoteFile);
-					Cat = strchr(Pkt.RemoteFile, NUL);
-					strcat(Pkt.RemoteFile, f.File);
-
-					if (MirrorFnameCnv == YES)
-						_strlwr(Cat);
-
-					ReplaceAll(Pkt.RemoteFile, '\\', '/');
+					auto Cat = MirrorFnameCnv == YES ? lc(f.Name) : f.Name;
+					Pkt.Remote = ReplaceAll(SetSlashTail(std::wstring{ AskRemoteCurDir() }) + Cat, L'\\', L'/');
 
 					if (f.Node == NODE_DIR) {
-						strcpy(Pkt.LocalFile, "");
-						strcpy(Pkt.Cmd, "R-MKD ");
+						Pkt.Local.clear();
+						Pkt.Command = L"R-MKD "s;
 						AddTmpTransFileList(Pkt, list);
 					} else if (f.Node == NODE_FILE) {
-						strcpy(Pkt.LocalFile, (AskLocalCurDir() / fs::u8path(f.File)).u8string().c_str());
+						Pkt.Local = AskLocalCurDir() / f.Name;
 
-						strcpy(Pkt.Cmd, "STOR ");
-						Pkt.Type = AskTransferTypeAssoc(Pkt.LocalFile, AskTransferType());
+						Pkt.Command = L"STOR "s;
+						Pkt.Type = AskTransferTypeAssoc(Pkt.Local.native(), AskTransferType());
 						Pkt.Size = f.Size;
 						Pkt.Time = f.Time;
-						Pkt.Attr = AskUploadFileAttr(Pkt.RemoteFile);
+						Pkt.Attr = AskUploadFileAttr(Pkt.Remote);
 						Pkt.KanjiCode = AskHostKanjiCode();
 						// UTF-8対応
 						Pkt.KanjiCodeDesired = AskLocalKanjiCode();
@@ -1445,22 +1228,18 @@ void MirrorUploadProc(int Notify)
 			{
 				if(AskNoFullPathMode() == YES)
 				{
-					strcpy(Pkt.Cmd, "SETCUR");
-					strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
+					Pkt.Command = L"SETCUR"s;
+					Pkt.Remote = AskRemoteCurDir();
 					AddTransFileList(&Pkt);
 				}
 				AppendTransFileList(std::move(list));
 
 				if(AskNoFullPathMode() == YES)
 				{
-					strcpy(Pkt.Cmd, "BACKCUR");
-					strcpy(Pkt.RemoteFile, u8(AskRemoteCurDir()).c_str());
+					Pkt.Command = L"BACKCUR"s;
+					Pkt.Remote = AskRemoteCurDir();
 					AddTransFileList(&Pkt);
 				}
-
-				// 同時接続対応
-//				strcpy(Pkt.Cmd, "GOQUIT");
-//				AddTransFileList(&Pkt);
 			}
 
 			// バグ対策
@@ -1479,12 +1258,9 @@ void MirrorUploadProc(int Notify)
 static void MirrorDeleteAllDir(std::vector<FILELIST> const& Remote, TRANSPACKET& item, std::forward_list<TRANSPACKET>& list) {
 	for (auto it = rbegin(Remote); it != rend(Remote); ++it)
 		if (it->Node == NODE_DIR && it->Attr == YES) {
-			strcpy(item.RemoteFile, u8(AskRemoteCurDir()).c_str());
-			SetSlashTail(item.RemoteFile);
-			strcat(item.RemoteFile, it->File);
-			ReplaceAll(item.RemoteFile, '\\', '/');
-			strcpy(item.LocalFile, "");
-			strcpy(item.Cmd, "R-RMD ");
+			item.Remote = ReplaceAll(SetSlashTail(std::wstring{ AskRemoteCurDir() }) + it->Name, L'\\', L'/');
+			item.Local.clear();
+			item.Command = L"R-RMD "s;
 			AddTmpTransFileList(item, list);
 		}
 }
@@ -1518,59 +1294,38 @@ static int MirrorNotify(bool upload) {
 
 // ミラーリングで転送／削除するファイルの数を数えダイアログに表示
 static void CountMirrorFiles(HWND hDlg, std::forward_list<TRANSPACKET> const& list) {
-	char Tmp[80];
 	int Del = 0, Make = 0, Copy = 0;
 	for (auto const& item : list) {
-		if (strncmp(item.Cmd, "R-DELE", 6) == 0 || strncmp(item.Cmd, "R-RMD", 5) == 0 || strncmp(item.Cmd, "L-DELE", 6) == 0 || strncmp(item.Cmd, "L-RMD", 5) == 0)
+		if (item.Command.starts_with(L"R-DELE"sv) || item.Command.starts_with(L"R-RMD"sv) || item.Command.starts_with(L"L-DELE"sv) || item.Command.starts_with(L"L-RMD"sv))
 			Del++;
-		else if (strncmp(item.Cmd, "R-MKD", 5) == 0 || strncmp(item.Cmd, "L-MKD", 5) == 0)
+		else if (item.Command.starts_with(L"R-MKD"sv) || item.Command.starts_with(L"L-MKD"sv))
 			Make++;
-		else if (strncmp(item.Cmd, "STOR", 4) == 0 || strncmp(item.Cmd, "RETR", 4) == 0)
+		else if (item.Command.starts_with(L"STOR"sv) || item.Command.starts_with(L"RETR"sv))
 			Copy++;
 	}
-
-	if(Copy != 0)
-		sprintf(Tmp, MSGJPN058, Copy);
-	else
-		sprintf(Tmp, MSGJPN059);
-	SetText(hDlg, MIRROR_COPYNUM, u8(Tmp));
-
-	if(Make != 0)
-		sprintf(Tmp, MSGJPN060, Make);
-	else
-		sprintf(Tmp, MSGJPN061);
-	SetText(hDlg, MIRROR_MAKENUM, u8(Tmp));
-
-	if(Del != 0)
-		sprintf(Tmp, MSGJPN062, Del);
-	else
-		sprintf(Tmp, MSGJPN063);
-	SetText(hDlg, MIRROR_DELNUM, u8(Tmp));
-
-	return;
+	SetText(hDlg, MIRROR_COPYNUM, Copy != 0 ? strprintf(GetString(IDS_MSGJPN058).c_str(), Copy) : GetString(IDS_MSGJPN059));
+	SetText(hDlg, MIRROR_MAKENUM, Make != 0 ? strprintf(GetString(IDS_MSGJPN060).c_str(), Make) : GetString(IDS_MSGJPN061));
+	SetText(hDlg, MIRROR_DELNUM, Del != 0 ? strprintf(GetString(IDS_MSGJPN062).c_str(), Del) : GetString(IDS_MSGJPN063));
 }
 
 
 // ミラーリングで転送／削除しないファイルかどうかを返す
 // Mode : 0=転送しないファイル, 1=削除しないファイル
-static int AskMirrorNoTrn(char *Fname, int Mode) {
-	if (auto Tbl = Mode == 1 ? MirrorNoDel : MirrorNoTrn; 0 < StrMultiLen(Tbl))
-		for (auto wFname = u8(GetFileName(Fname)); *Tbl != NUL; Tbl += strlen(Tbl) + 1)
-			if (CheckFname(wFname, u8(Tbl)))
+static int AskMirrorNoTrn(std::wstring_view path, int Mode) {
+	if (auto const& patterns = Mode == 1 ? MirrorNoDel : MirrorNoTrn; !empty(patterns))
+		for (std::wstring const file{ GetFileName(path) }; auto const& pattern : patterns)
+			if (CheckFname(file, pattern))
 				return YES;
 	return NO;
 }
 
 
 // アップロードするファイルの属性を返す
-static int AskUploadFileAttr(char *Fname) {
-	auto wFname = u8(GetFileName(Fname));
-	for (char* Tbl = DefAttrList; *Tbl != NUL; Tbl += strlen(Tbl) + 1) {
-		auto match = CheckFname(wFname, u8(Tbl));
-		Tbl += strlen(Tbl) + 1;
-		if (match && *Tbl != NUL)
-			return std::strtol(Tbl, nullptr, 16);
-	}
+static int AskUploadFileAttr(std::wstring const& path) {
+	std::wstring const file{ GetFileName(path) };
+	for (size_t i = 0; i < size(DefAttrList); i += 2)
+		if (CheckFname(file, DefAttrList[i]))
+			return std::stol(DefAttrList[i + 1], nullptr, 16);
 	return -1;
 }
 
@@ -1597,7 +1352,7 @@ static int CheckRemoteFile(TRANSPACKET *Pkt, std::vector<FILELIST> const& ListLi
 		UpExistDialog(TRANSPACKET* Pkt) : Pkt{ Pkt } {}
 		INT_PTR OnInit(HWND hDlg) {
 			SendDlgItemMessageW(hDlg, UP_EXIST_NAME, EM_LIMITTEXT, FMAX_PATH, 0);
-			SetText(hDlg, UP_EXIST_NAME, u8(Pkt->RemoteFile));
+			SetText(hDlg, UP_EXIST_NAME, Pkt->Remote);
 			if (Pkt->Type == TYPE_A || Pkt->ExistSize <= 0)
 				EnableWindow(GetDlgItem(hDlg, UP_EXIST_RESUME), FALSE);
 			UpExistButton::Set(hDlg, UpExistMode);
@@ -1610,7 +1365,7 @@ static int CheckRemoteFile(TRANSPACKET *Pkt, std::vector<FILELIST> const& ListLi
 				[[fallthrough]];
 			case IDOK:
 				UpExistMode = UpExistButton::Get(hDlg);
-				strncpy_s(Pkt->RemoteFile, FMAX_PATH, u8(GetText(hDlg, UP_EXIST_NAME)).c_str(), _TRUNCATE);
+				Pkt->Remote = GetText(hDlg, UP_EXIST_NAME);
 				EndDialog(hDlg, true);
 				break;
 			case IDCANCEL:
@@ -1635,13 +1390,13 @@ static int CheckRemoteFile(TRANSPACKET *Pkt, std::vector<FILELIST> const& ListLi
 #endif
 			COMP_STRICT;
 
-		if(auto Exist = SearchFileList(GetFileName(Pkt->RemoteFile), ListList, Mode))
+		if(auto Exist = SearchFileList(GetFileName(Pkt->Remote), ListList, Mode))
 		{
 			Pkt->ExistSize = Exist->Size;
 
 			if(ExistNotify == YES)
 			{
-				SoundPlay(SND_ERROR);
+				Sound::Error.Play();
 				Ret = Dialog(GetFtpInst(), up_exist_dlg, GetMainHwnd(), UpExistDialog{ Pkt }) ? UpExistMode : EXIST_ABORT;
 			}
 			else
@@ -1670,22 +1425,23 @@ static int CheckRemoteFile(TRANSPACKET *Pkt, std::vector<FILELIST> const& ListLi
 
 
 // アップロード／ダウンロードファイル名入力ダイアログ
-static bool UpDownAsDialog(int win) {
+static bool UpDownAsDialog(std::wstring& name, int win) {
 	struct Data {
 		using result_t = bool;
+		std::wstring& name;
 		int win;
-		Data(int win) : win{ win } {}
+		Data(std::wstring& name, int win) : name{ name }, win{ win } {}
 		INT_PTR OnInit(HWND hDlg) {
 			SetText(hDlg, GetString(win == WIN_LOCAL ? IDS_MSGJPN064 : IDS_MSGJPN065));
 			SendDlgItemMessageW(hDlg, UPDOWNAS_NEW, EM_LIMITTEXT, FMAX_PATH, 0);
-			SetText(hDlg, UPDOWNAS_NEW, u8(TmpString));
-			SetText(hDlg, UPDOWNAS_TEXT, u8(TmpString));
+			SetText(hDlg, UPDOWNAS_NEW, name);
+			SetText(hDlg, UPDOWNAS_TEXT, name);
 			return TRUE;
 		}
 		void OnCommand(HWND hDlg, WORD id) {
 			switch (id) {
 			case IDOK:
-				strncpy_s(TmpString, FMAX_PATH, u8(GetText(hDlg, UPDOWNAS_NEW)).c_str(), _TRUNCATE);
+				name = GetText(hDlg, UPDOWNAS_NEW);
 				EndDialog(hDlg, true);
 				break;
 			case UPDOWNAS_STOP:
@@ -1694,7 +1450,7 @@ static bool UpDownAsDialog(int win) {
 			}
 		}
 	};
-	return Dialog(GetFtpInst(), updown_as_dlg, GetMainHwnd(), Data{ win });
+	return Dialog(GetFtpInst(), updown_as_dlg, GetMainHwnd(), Data{ name, win });
 }
 
 
@@ -1712,8 +1468,6 @@ void DeleteProc(void)
 	int Win;
 	int DelFlg;
 	int Sts;
-	char CurDir[FMAX_PATH+1];
-	char Tmp[FMAX_PATH+1];
 
 	// 同時接続対応
 	CancelFlg = NO;
@@ -1733,7 +1487,7 @@ void DeleteProc(void)
 	{
 		// デッドロック対策
 		DisableUserOpe();
-		strcpy(CurDir, u8(AskRemoteCurDir()).c_str());
+		auto CurDir = AskRemoteCurDir();
 		std::vector<FILELIST> FileListBase;
 		if(Win == WIN_LOCAL)
 			MakeSelectedFileList(Win, NO, NO, FileListBase, &CancelFlg);
@@ -1754,11 +1508,8 @@ void DeleteProc(void)
 			DeleteAllDir(FileListBase, Win, &Sts, &DelFlg, CurDir);
 
 		if(Win == WIN_REMOTE)
-		{
-			strcpy(Tmp, u8(AskRemoteCurDir()).c_str());
-			if(strcmp(Tmp, CurDir) != 0)
+			if (auto const Tmp = AskRemoteCurDir(); Tmp != CurDir)
 				DoCWD(Tmp, NO, NO, NO);
-		}
 
 		if(DelFlg == YES)
 		{
@@ -1775,20 +1526,8 @@ void DeleteProc(void)
 }
 
 
-/*----- サブディレクトリ以下を全て削除する ------------------------------------
-*
-*	Parameter
-*		FILELIST *Dt : 削除するファイルのリスト
-*		int Win : ウインドウ番号 (WIN_xxx)
-*		int *Sw : 操作方法 (YES/NO/YES_ALL/NO_ALL)
-*		int *Flg : ファイルを削除したかどうかのフラグ (YES/NO)
-*		char *CurDir : カレントディレクトリ
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-static void DeleteAllDir(std::vector<FILELIST> const& Dt, int Win, int *Sw, int *Flg, char *CurDir) {
+// サブディレクトリ以下を全て削除する
+static void DeleteAllDir(std::vector<FILELIST> const& Dt, int Win, int *Sw, int *Flg, std::wstring& CurDir) {
 	for (auto it = rbegin(Dt); it != rend(Dt); ++it)
 		if (it->Node == NODE_DIR) {
 			DelNotifyAndDo(*it, Win, Sw, Flg, CurDir);
@@ -1798,27 +1537,15 @@ static void DeleteAllDir(std::vector<FILELIST> const& Dt, int Win, int *Sw, int 
 }
 
 
-/*----- 削除するかどうかの確認と削除実行 --------------------------------------
-*
-*	Parameter
-*		FILELIST *Dt : 削除するファイルのリスト
-*		int Win : ウインドウ番号 (WIN_xxx)
-*		int *Sw : 操作方法 (YES/NO/YES_ALL/NO_ALL)
-*		int *Flg : ファイルを削除したかどうかのフラグ (YES/NO)
-*		char *CurDir : カレントディレクトリ
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-static void DelNotifyAndDo(FILELIST const& Dt, int Win, int *Sw, int *Flg, char *CurDir) {
+// 削除するかどうかの確認と削除実行
+static void DelNotifyAndDo(FILELIST const& Dt, int Win, int* Sw, int* Flg, std::wstring& CurDir) {
 	struct DeleteDialog {
 		using result_t = int;
+		std::wstring const& path;
 		int win;
-		DeleteDialog(int win) : win{ win } {}
 		INT_PTR OnInit(HWND hDlg) {
 			SetText(hDlg, GetString(win == WIN_LOCAL ? IDS_MSGJPN066 : IDS_MSGJPN067));
-			SetText(hDlg, DELETE_TEXT, u8(TmpString));
+			SetText(hDlg, DELETE_TEXT, path);
 			return TRUE;
 		}
 		void OnCommand(HWND hDlg, WORD id) {
@@ -1838,58 +1565,34 @@ static void DelNotifyAndDo(FILELIST const& Dt, int Win, int *Sw, int *Flg, char 
 			}
 		}
 	};
-	char Path[FMAX_PATH+1];
 
-	if(Win == WIN_LOCAL)
-		strcpy(Path, (AskLocalCurDir() / fs::u8path(Dt.File)).u8string().c_str());
-	else
-	{
-		strcpy(Path, u8(AskRemoteCurDir()).c_str());
-		SetSlashTail(Path);
-		strcat(Path, Dt.File);
-		ReplaceAll(Path, '\\', '/');
+	auto path = Win == WIN_LOCAL ? (AskLocalCurDir() / Dt.Name).native() : ReplaceAll(SetSlashTail(std::wstring{ AskRemoteCurDir() }) + Dt.Name, L'\\', L'/');
+	if (*Sw != YES_ALL) {
+		auto path2 = path;
+		if (Win == WIN_REMOTE && AskHostType() == HTYPE_VMS)
+			path2 = ReformToVMSstylePathName(path2);
+		*Sw = Dialog(GetFtpInst(), delete_dlg, GetMainHwnd(), DeleteDialog{ path2, Win });
 	}
-
-	if(*Sw != YES_ALL)
-	{
-		sprintf(TmpString, "%s", Path);
-
-		// ローカルのファイルのパスの最後の'\\'が消えるバグ修正
-//		if(AskHostType() == HTYPE_VMS)
-		if(Win == WIN_REMOTE && AskHostType() == HTYPE_VMS)
-			ReformToVMSstylePathName(TmpString);
-		*Sw = Dialog(GetFtpInst(), delete_dlg, GetMainHwnd(), DeleteDialog{ Win });
-	}
-
-	if((*Sw == YES) || (*Sw == YES_ALL))
-	{
-		if(Win == WIN_LOCAL)
-		{
-			if(Dt.Node == NODE_FILE)
-				DoLocalDELE(Path);
+	if (*Sw == YES || *Sw == YES_ALL) {
+		if (Win == WIN_LOCAL) {
+			if (Dt.Node == NODE_FILE)
+				DoLocalDELE(path);
 			else
-				DoLocalRMD(Path);
+				DoLocalRMD(path);
 			*Flg = YES;
-		}
-		else
-		{
+		} else {
 			/* フルパスを使わない時のための処理 */
-			// 同時接続対応
-//			if(ProcForNonFullpath(Path, CurDir, GetMainHwnd(), 0) == FFFTP_FAIL)
-			if(ProcForNonFullpath(AskCmdCtrlSkt(), Path, CurDir, GetMainHwnd(), &CancelFlg) == FFFTP_FAIL)
+			if (ProcForNonFullpath(AskCmdCtrlSkt(), path, CurDir, GetMainHwnd(), &CancelFlg) == FFFTP_FAIL)
 				*Sw = NO_ALL;
-
-			if(*Sw != NO_ALL)
-			{
-				if(Dt.Node == NODE_FILE)
-					DoDELE(Path);
+			if (*Sw != NO_ALL) {
+				if (Dt.Node == NODE_FILE)
+					DoDELE(path);
 				else
-					DoRMD(Path);
+					DoRMD(path);
 				*Flg = YES;
 			}
 		}
 	}
-	return;
 }
 
 
@@ -1906,19 +1609,20 @@ void RenameProc(void)
 {
 	struct RenameDialog {
 		using result_t = int;
+		std::wstring name;
 		int win;
-		RenameDialog(int win) : win{ win } {}
+		RenameDialog(std::wstring_view name, int win) : name{ name }, win{ win } {}
 		INT_PTR OnInit(HWND hDlg) {
 			SetText(hDlg, GetString(win == WIN_LOCAL ? IDS_MSGJPN068 : IDS_MSGJPN069));
 			SendDlgItemMessageW(hDlg, RENAME_NEW, EM_LIMITTEXT, FMAX_PATH, 0);
-			SetText(hDlg, RENAME_NEW, u8(TmpString));
-			SetText(hDlg, RENAME_TEXT, u8(TmpString));
+			SetText(hDlg, RENAME_NEW, name);
+			SetText(hDlg, RENAME_TEXT, name);
 			return TRUE;
 		}
 		void OnCommand(HWND hDlg, WORD id) {
 			switch (id) {
 			case IDOK:
-				strncpy_s(TmpString, FMAX_PATH, u8(GetText(hDlg, RENAME_NEW)).c_str(), _TRUNCATE);
+				name = GetText(hDlg, RENAME_NEW);
 				EndDialog(hDlg, YES);
 				break;
 			case IDCANCEL:
@@ -1931,7 +1635,6 @@ void RenameProc(void)
 		}
 	};
 	int Win;
-	char New[FMAX_PATH+1];
 	int RenFlg;
 	int Sts;
 
@@ -1958,18 +1661,15 @@ void RenameProc(void)
 		Sts = NO;
 		for (auto const& f : FileListBase)
 			if (f.Node == NODE_FILE || f.Node == NODE_DIR) {
-				strcpy(TmpString, f.File);
-				Sts = Dialog(GetFtpInst(), rename_dlg, GetMainHwnd(), RenameDialog{ Win });
-
+				RenameDialog data{ f.Name, Win };
+				Sts = Dialog(GetFtpInst(), rename_dlg, GetMainHwnd(), data);
 				if (Sts == NO_ALL)
 					break;
-
-				if ((Sts == YES) && (strlen(TmpString) != 0)) {
-					strcpy(New, TmpString);
+				if (Sts == YES && !empty(data.name)) {
 					if (Win == WIN_LOCAL)
-						DoLocalRENAME(f.File, New);
+						DoLocalRENAME(f.Name, data.name);
 					else
-						DoRENAME(f.File, New);
+						DoRENAME(f.Name, data.name);
 					RenFlg = YES;
 				}
 			}
@@ -2022,9 +1722,6 @@ void MoveRemoteFileProc(int drop_index)
 
 	int Win;
 	FILELIST Pkt;
-	char New[FMAX_PATH+1];
-	char Old[FMAX_PATH+1];
-	char HostDir[FMAX_PATH+1];
 	int RenFlg;
 	int Sts;
 
@@ -2036,17 +1733,11 @@ void MoveRemoteFileProc(int drop_index)
 		return;
 	}
 
-	strcpy(HostDir, u8(AskRemoteCurDir()).c_str());
+	auto const HostDir = AskRemoteCurDir();
 
 	// ドロップ先のフォルダ名を得る
-	// 上位のディレクトリへ移動対応
-//	GetNodeName(WIN_REMOTE, drop_index, Pkt.File, FMAX_PATH);
-	if(drop_index >= 0)
-		GetNodeName(WIN_REMOTE, drop_index, Pkt.File, FMAX_PATH);
-	else
-		strcpy(Pkt.File, "..");
-
-	if (MoveMode == MOVE_DLG && !Dialog(GetFtpInst(), move_notify_dlg, GetRemoteHwnd(), Data{ u8(Pkt.File) }))
+	Pkt.Name = 0 <= drop_index ? GetNodeName(WIN_REMOTE, drop_index) : L".."s;
+	if (MoveMode == MOVE_DLG && !Dialog(GetFtpInst(), move_notify_dlg, GetRemoteHwnd(), Data{ Pkt.Name }))
 		return;
 
 	Sts = FFFTP_SUCCESS;
@@ -2071,28 +1762,15 @@ void MoveRemoteFileProc(int drop_index)
 		MakeSelectedFileList(Win, NO, NO, FileListBase, &CancelFlg);
 
 		RenFlg = NO;
-		Sts = NO;
 		for (auto const& f : FileListBase)
 			if (f.Node == NODE_FILE || f.Node == NODE_DIR) {
-				strcpy(TmpString, f.File);
-				Sts = YES;
-				if (strlen(TmpString) != 0) {
-					// パスの設定(local)
-					strncpy_s(Old, sizeof(Old), HostDir, _TRUNCATE);
-					strncat_s(Old, sizeof(Old), "/", _TRUNCATE);
-					strncat_s(Old, sizeof(Old), f.File, _TRUNCATE);
-
-					// パスの設定(remote)
-					strncpy_s(New, sizeof(New), HostDir, _TRUNCATE);
-					strncat_s(New, sizeof(New), "/", _TRUNCATE);
-					strncat_s(New, sizeof(New), Pkt.File, _TRUNCATE);
-					strncat_s(New, sizeof(New), "/", _TRUNCATE);
-					strncat_s(New, sizeof(New), f.File, _TRUNCATE);
-
+				if (!empty(f.Name)) {
+					auto const from = std::format(L"{}/{}"sv, HostDir, f.Name);
+					auto const to = std::format(L"{}/{}/{}"sv, HostDir, Pkt.Name, f.Name);
 					if (Win == WIN_LOCAL)
-						DoLocalRENAME(Old, New);
+						DoLocalRENAME(from, to);
 					else
-						DoRENAME(Old, New);
+						DoRENAME(from, to);
 					RenFlg = YES;
 				}
 			}
@@ -2103,11 +1781,8 @@ void MoveRemoteFileProc(int drop_index)
 				GetLocalDirForWnd();
 			} else {
 				GetRemoteDirForWnd(CACHE_REFRESH, &CancelFlg);
-
-				strncpy_s(New, sizeof(New), HostDir, _TRUNCATE);
-				strncat_s(New, sizeof(New), "/", _TRUNCATE);
-				strncat_s(New, sizeof(New), Pkt.File, _TRUNCATE);
-				DoCWD(New, YES, YES, YES);
+				auto const dir = std::format(L"{}/{}"sv, HostDir, Pkt.Name);
+				DoCWD(dir, YES, YES, YES);
 				GetRemoteDirForWnd(CACHE_REFRESH, &CancelFlg);
 			}
 		}
@@ -2129,29 +1804,14 @@ void MoveRemoteFileProc(int drop_index)
 
 void MkdirProc(void)
 {
-	int Win;
-	char *Title;
-
-	// 同時接続対応
 	CancelFlg = NO;
-
-	if(GetFocus() == GetLocalHwnd())
-	{
-		Win = WIN_LOCAL;
-		Title = MSGJPN070;
-	}
-	else
-	{
-		Win = WIN_REMOTE;
-		Title = MSGJPN071;
-	}
-
-	if (char Path[FMAX_PATH + 1] = ""; InputDialog(mkdir_dlg, GetMainHwnd(), Title, Path, FMAX_PATH + 1) && strlen(Path) != 0)
+	auto [Win, titleId] = GetFocus() == GetLocalHwnd() ? std::tuple{ WIN_LOCAL, IDS_MSGJPN070 } : std::tuple{ WIN_REMOTE, IDS_MSGJPN071 };
+	if (std::wstring path; InputDialog(mkdir_dlg, GetMainHwnd(), titleId, path, FMAX_PATH + 1) && !empty(path))
 	{
 		if(Win == WIN_LOCAL)
 		{
 			DisableUserOpe();
-			DoLocalMKD(Path);
+			DoLocalMKD(path);
 			GetLocalDirForWnd();
 			EnableUserOpe();
 		}
@@ -2160,7 +1820,7 @@ void MkdirProc(void)
 			if(CheckClosedAndReconnect() == FFFTP_SUCCESS)
 			{
 				DisableUserOpe();
-				DoMKD(Path);
+				DoMKD(path);
 				GetRemoteDirForWnd(CACHE_REFRESH, &CancelFlg);
 				EnableUserOpe();
 			}
@@ -2179,22 +1839,21 @@ void MkdirProc(void)
 *		なし
 *----------------------------------------------------------------------------*/
 void ChangeDirComboProc(HWND hWnd) {
-	char Tmp[FMAX_PATH+1];
 	CancelFlg = NO;
 	if (auto i = (int)SendMessageW(hWnd, CB_GETCURSEL, 0, 0); i != CB_ERR) {
 		auto length = SendMessageW(hWnd, CB_GETLBTEXTLEN, i, 0);
 		std::wstring text(length, L'\0');
 		length = SendMessageW(hWnd, CB_GETLBTEXT, i, (LPARAM)data(text));
-		strncpy_s(Tmp, u8(text.c_str(), length).c_str(), _TRUNCATE);
+		text.resize(length);
 		if (hWnd == GetLocalHistHwnd()) {
 			DisableUserOpe();
-			DoLocalCWD(Tmp);
+			DoLocalCWD(text);
 			GetLocalDirForWnd();
 			EnableUserOpe();
 		} else {
 			if (CheckClosedAndReconnect() == FFFTP_SUCCESS) {
 				DisableUserOpe();
-				if(DoCWD(Tmp, YES, NO, YES) < FTP_RETRY)
+				if(DoCWD(text, YES, NO, YES) < FTP_RETRY)
 					GetRemoteDirForWnd(CACHE_NORMAL, &CancelFlg);
 				EnableUserOpe();
 			}
@@ -2221,7 +1880,7 @@ void ChangeDirBmarkProc(int MarkID)
 	if(!empty(local))
 	{
 		DisableUserOpe();
-		if(DoLocalCWD(u8(local).data()) == FFFTP_SUCCESS)
+		if (DoLocalCWD(local))
 			GetLocalDirForWnd();
 		EnableUserOpe();
 	}
@@ -2231,7 +1890,7 @@ void ChangeDirBmarkProc(int MarkID)
 		if(CheckClosedAndReconnect() == FFFTP_SUCCESS)
 		{
 			DisableUserOpe();
-			if(DoCWD(u8(remote).data(), YES, NO, YES) < FTP_RETRY)
+			if(DoCWD(remote, YES, NO, YES) < FTP_RETRY)
 				GetRemoteDirForWnd(CACHE_NORMAL, &CancelFlg);
 			EnableUserOpe();
 		}
@@ -2240,81 +1899,58 @@ void ChangeDirBmarkProc(int MarkID)
 }
 
 
-/*----- ディレクトリ名を入力してディレクトリの移動 ----------------------------
-*
-*	Parameter
-*		int Win : ウインドウ番号 (WIN_xxx)
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-void ChangeDirDirectProc(int Win)
-{
-	bool result = false;
-	char Path[FMAX_PATH+1];
-	char *Title;
-
-	// 同時接続対応
+// ディレクトリ名を入力してディレクトリの移動
+void ChangeDirDirectProc(int Win) {
 	CancelFlg = NO;
-
-	if(Win == WIN_LOCAL)
-		Title = MSGJPN072;
-	else
-		Title = MSGJPN073;
-
-	strcpy(Path, "");
-	if(Win == WIN_LOCAL)
-	{
-		if(SelectDir(GetMainHwnd(), Path, FMAX_PATH) == TRUE)
-			result = true;
-	}
-	else
-		result = InputDialog(chdir_dlg, GetMainHwnd(), Title, Path, FMAX_PATH+1);
-
-	if(result && strlen(Path) != 0)
-	{
-		if(Win == WIN_LOCAL)
-		{
+	if (Win == WIN_LOCAL) {
+		if (auto const path = SelectDir(GetMainHwnd()); !path.empty()) {
 			DisableUserOpe();
-			DoLocalCWD(Path);
+			DoLocalCWD(path);
 			GetLocalDirForWnd();
 			EnableUserOpe();
 		}
-		else
-		{
-			if(CheckClosedAndReconnect() == FFFTP_SUCCESS)
-			{
-				DisableUserOpe();
-				if(DoCWD(Path, YES, NO, YES) < FTP_RETRY)
-					GetRemoteDirForWnd(CACHE_NORMAL, &CancelFlg);
-				EnableUserOpe();
-			}
+	} else {
+		if (std::wstring path; InputDialog(chdir_dlg, GetMainHwnd(), IDS_MSGJPN073, path, FMAX_PATH + 1) && !path.empty() && CheckClosedAndReconnect() == FFFTP_SUCCESS) {
+			DisableUserOpe();
+			if (DoCWD(path, YES, NO, YES) < FTP_RETRY)
+				GetRemoteDirForWnd(CACHE_NORMAL, &CancelFlg);
+			EnableUserOpe();
 		}
 	}
-	return;
 }
 
 
-/*----- Dropされたファイルによるディレクトリの移動 ----------------------------
-*
-*	Parameter
-*		WPARAM wParam : ドロップされたファイルの情報
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-void ChangeDirDropFileProc(WPARAM wParam)
-{
-	char Path[FMAX_PATH+1];
-
+// Dropされたファイルによるディレクトリの移動
+void ChangeDirDropFileProc(WPARAM wParam) {
 	DisableUserOpe();
-	MakeDroppedDir(wParam, Path);
-	DoLocalCWD(Path);
+	DoLocalCWD(MakeDroppedDir(wParam));
 	GetLocalDirForWnd();
 	EnableUserOpe();
-	return;
+}
+
+
+// ShellExecute等で使用されるファイル名を修正
+// UNCでない場合に末尾の半角スペースは無視されるため拡張子が補完されなくなるまで半角スペースを追加
+// 現在UNC対応の予定は無い
+fs::path MakeDistinguishableFileName(fs::path&& path) {
+	if (path.has_extension())
+		return path;
+	auto const filename = path.filename().native();
+	auto current = path.native();
+	WIN32_FIND_DATAW data;
+	for (HANDLE handle; (handle = FindFirstFileW((current + L".*"sv).c_str(), &data)) != INVALID_HANDLE_VALUE; current += L' ') {
+		bool invalid = false;
+		do {
+			if (data.cFileName != filename) {
+				invalid = true;
+				break;
+			}
+		} while (FindNextFileW(handle, &data));
+		FindClose(handle);
+		if (!invalid)
+			break;
+	}
+	return current;
 }
 
 
@@ -2347,7 +1983,7 @@ void ChmodProc(void)
 					ChmodFlg = NO;
 					for (auto const& f : FileListBase)
 						if (f.Node == NODE_FILE || f.Node == NODE_DIR) {
-							DoCHMOD(f.File, u8(*newattr).c_str());
+							DoCHMOD(f.Name, *newattr);
 							ChmodFlg = YES;
 						}
 					if(ChmodFlg == YES)
@@ -2362,8 +1998,12 @@ void ChmodProc(void)
 		DisableUserOpe();
 		std::vector<FILELIST> FileListBase;
 		MakeSelectedFileList(WIN_LOCAL, NO, NO, FileListBase, &CancelFlg);
-		if (!empty(FileListBase))
-			DispFileProperty(FileListBase[0].File);
+		if (!empty(FileListBase)) {
+			// ファイルのプロパティを表示する
+			auto path = MakeDistinguishableFileName(FileListBase[0].Name);
+			SHELLEXECUTEINFOW info{ sizeof(SHELLEXECUTEINFOW), SEE_MASK_INVOKEIDLIST, 0, L"Properties", path.c_str(), nullptr, nullptr, SW_NORMAL };
+			ShellExecuteExW(&info);
+		}
 		EnableUserOpe();
 	}
 	return;
@@ -2519,11 +2159,9 @@ void SomeCmdProc(void)
 			DisableUserOpe();
 			std::vector<FILELIST> FileListBase;
 			MakeSelectedFileList(WIN_REMOTE, NO, NO, FileListBase, &CancelFlg);
-			char Cmd[81] = {};
-			if (!empty(FileListBase))
-				strncpy(Cmd, FileListBase[0].File, 80);
-			if (InputDialog(somecmd_dlg, GetMainHwnd(), NULL, Cmd, 81, nullptr, IDH_HELP_TOPIC_0000023))
-				DoQUOTE(AskCmdCtrlSkt(), Cmd, &CancelFlg);
+			auto cmd = empty(FileListBase) ? L""s : FileListBase[0].Name;
+			if (InputDialog(somecmd_dlg, GetMainHwnd(), 0, cmd, 81, nullptr, IDH_HELP_TOPIC_0000023))
+				DoQUOTE(AskCmdCtrlSkt(), cmd, &CancelFlg);
 			EnableUserOpe();
 		}
 	}
@@ -2557,11 +2195,11 @@ void CalcFileSizeProc() {
 	struct Size {
 		using result_t = int;
 		int win;
-		const char* size;
-		Size(int win, const char* size) : win{ win }, size{ size } {}
+		double size;
+		Size(int win, double size) : win{ win }, size{ size } {}
 		INT_PTR OnInit(HWND hDlg) {
 			SetText(hDlg, FSIZE_TITLE, GetString(win == WIN_LOCAL ? IDS_MSGJPN076 : IDS_MSGJPN077));
-			SetText(hDlg, FSIZE_SIZE, u8(size));
+			SetText(hDlg, FSIZE_SIZE, MakeSizeString(size));
 			return TRUE;
 		}
 		void OnCommand(HWND hDlg, WORD id) {
@@ -2583,9 +2221,7 @@ void CalcFileSizeProc() {
 			for (auto const& f : ListBase)
 				if (f.Node != NODE_DIR)
 					total += f.Size;
-			char size[FMAX_PATH + 1];
-			MakeSizeString(total, size);
-			Dialog(GetFtpInst(), filesize_dlg, GetMainHwnd(), Size{ Win, size });
+			Dialog(GetFtpInst(), filesize_dlg, GetMainHwnd(), Size{ Win, total });
 		}
 }
 
@@ -2604,22 +2240,20 @@ void CopyURLtoClipBoard() {
 	MakeSelectedFileList(WIN_REMOTE, NO, NO, FileListBase, &CancelFlg);
 	if (empty(FileListBase))
 		return;
-	auto baseAddress = L"ftp://"s + u8(AskHostAdrs());
+	auto baseAddress = L"ftp://"s + AskHostAdrs();
 	if (auto port = AskHostPort(); port != IPPORT_FTP)
 		baseAddress.append(L":").append(std::to_wstring(port));
 	{
-		char dir[FMAX_PATH + 1];
-		strcpy(dir, u8(AskRemoteCurDir()).c_str());
-		SetSlashTail(dir);
+		auto dir = SetSlashTail(std::wstring{ AskRemoteCurDir() });
 		if (AskHostType() == HTYPE_VMS) {
-			baseAddress += L"/"sv;
-			ReformToVMSstylePathName(dir);
+			baseAddress += L'/';
+			dir = ReformToVMSstylePathName(dir);
 		}
-		baseAddress += u8(dir);
+		baseAddress += dir;
 	}
 	std::wstring text;
 	for (auto const& f : FileListBase)
-		text.append(baseAddress).append(u8(f.File)).append(L"\r\n"sv);
+		text.append(baseAddress).append(f.Name).append(L"\r\n"sv);
 	if (OpenClipboard(GetMainHwnd())) {
 		if (EmptyClipboard())
 			if (auto global = GlobalAlloc(GHND, (size_as<SIZE_T>(text) + 1) * sizeof(wchar_t)); global)
@@ -2633,169 +2267,78 @@ void CopyURLtoClipBoard() {
 }
 
 
-/*----- フルパスを使わないファイルアクセスの準備 ------------------------------
-*
-*	Parameter
-*		char *Path : パス名
-*		char *CurDir : カレントディレクトリ
-*		HWND hWnd : エラーウインドウを表示する際の親ウインドウ
-*		int Type : 使用するソケットの種類
-*			0=コマンドソケット, 1=転送ソケット
-*
-*	Return Value
-*		int ステータス(FFFTP_SUCCESS/FFFTP_FAIL)
-*
-*	Note
-*		フルパスを使わない時は、
-*			このモジュール内で CWD を行ない、
-*			Path にファイル名のみ残す。（パス名は消す）
-*----------------------------------------------------------------------------*/
+// 上位ディレクトリのパス名を取得
+//   ディレクトリの区切り記号は "\" と "/" の両方が有効
+//   最初の "\"や"/"も消す
+//   "/pub"   --> ""
+//   "C:\DOS" --> "C:"
+static std::wstring_view GetUpperDirEraseTopSlash(std::wstring_view path) {
+	auto const pos = path.find_first_of(L"/\\"sv);
+	return path.substr(0, pos != std::wstring_view::npos ? pos : 0);
+}
 
-// 同時接続対応
-//int ProcForNonFullpath(char *Path, char *CurDir, HWND hWnd, int Type)
-int ProcForNonFullpath(SOCKET cSkt, char *Path, char *CurDir, HWND hWnd, int *CancelCheckWork)
-{
-	int Sts;
-	int Cmd;
-	char Tmp[FMAX_PATH+1];
 
-	Sts = FFFTP_SUCCESS;
-	if(AskNoFullPathMode() == YES)
-	{
-		strcpy(Tmp, Path);
-		if(AskHostType() == HTYPE_VMS)
-		{
-			GetUpperDirEraseTopSlash(Tmp);
-			ReformToVMSstyleDirName(Tmp);
-		}
-		else if(AskHostType() == HTYPE_STRATUS)
-			GetUpperDirEraseTopSlash(Tmp);
-		else
-			GetUpperDir(Tmp);
+// 上位ディレクトリのパス名を取得
+//    ディレクトリの区切り記号は "\" と "/" の両方が有効
+//    最初の "\"や"/"は残す
+//    "/pub"   --> "/"
+//    "C:\DOS" --> "C:\"
+static std::wstring_view GetUpperDir(std::wstring_view path) {
+	auto const first = path.find_first_of(L"/\\"sv);
+	if (first == std::wstring_view::npos)
+		return path;
+	auto const last = path.find_last_of(L"/\\"sv);
+	return path.substr(0, first == last ? first + 1 : last);
+}
 
-		if(strcmp(Tmp, CurDir) != 0)
-		{
-			Cmd = CommandProcTrn(cSkt, NULL, CancelCheckWork, "CWD %s", Tmp);
 
-			if(Cmd/100 != FTP_COMPLETE)
-			{
+// フルパスを使わないファイルアクセスの準備
+//   フルパスを使わない時は、このモジュール内で CWD を行ない、Path にファイル名のみ残す。（パス名は消す）
+int ProcForNonFullpath(SOCKET cSkt, std::wstring& Path, std::wstring& CurDir, HWND hWnd, int* CancelCheckWork) {
+	int Sts = FFFTP_SUCCESS;
+	if (AskNoFullPathMode() == YES) {
+		auto const Tmp = AskHostType() == HTYPE_VMS ? ReformToVMSstyleDirName(std::wstring{ GetUpperDirEraseTopSlash(Path) }) : AskHostType() == HTYPE_STRATUS ? std::wstring{ GetUpperDirEraseTopSlash(Path) } : std::wstring{ GetUpperDir(Path) };
+		if (Tmp != CurDir) {
+			if (int code = std::get<0>(Command(cSkt, CancelCheckWork, L"CWD {}"sv, Tmp)); code / 100 != FTP_COMPLETE) {
 				DispCWDerror(hWnd);
 				Sts = FFFTP_FAIL;
-			}
-			else
-				strcpy(CurDir, Tmp);
+			} else
+				CurDir = std::move(Tmp);
 		}
-		strcpy(Path, GetFileName(Path));
+		Path = GetFileName(std::move(Path));
 	}
-	return(Sts);
+	return Sts;
 }
 
 
-/*----- ディレクトリ名をVAX VMSスタイルに変換する -----------------------------
-*
-*	Parameter
-*		char *Path : パス名
-*
-*	Return Value
-*		なし
-*
-*	Note
-*		ddd:[xxx.yyy]/rrr/ppp  --> ddd:[xxx.yyy.rrr.ppp]
-*----------------------------------------------------------------------------*/
-
-void ReformToVMSstyleDirName(char *Path)
-{
-	char *Pos;
-	char *Btm;
-
-	if((Btm = strchr(Path, ']')) != NULL)
-	{
-		Pos = Btm;
-		while((Pos = strchr(Pos, '/')) != NULL)
-			*Pos = '.';
-
-		memmove(Btm, Btm+1, strlen(Btm+1)+1);
-		Pos = strchr(Path, NUL);
-		if(*(Pos-1) == '.')
-		{
-			Pos--;
-			*Pos = NUL;
-		}
-		strcpy(Pos, "]");
+// ディレクトリ名をVAX VMSスタイルに変換する
+//   ddd:[xxx.yyy]/rrr/ppp  --> ddd:[xxx.yyy.rrr.ppp]
+static std::wstring ReformToVMSstyleDirName(std::wstring&& path) {
+	if (auto btm = path.find(L']'); btm != std::wstring::npos) {
+		std::replace(begin(path) + btm, end(path), L'/', L'.');
+		path.erase(begin(path) + btm);
+		if (path.ends_with(L'.'))
+			path.resize(size(path) - 1);
+		path += L']';
 	}
-	return;
+	return path;
 }
 
 
-/*----- ファイル名をVAX VMSスタイルに変換する ---------------------------------
-*
-*	Parameter
-*		char *Path : パス名
-*
-*	Return Value
-*		なし
-*
-*	Note
-*		ddd:[xxx.yyy]/rrr/ppp  --> ddd:[xxx.yyy.rrr]ppp
-*----------------------------------------------------------------------------*/
-
-void ReformToVMSstylePathName(char *Path)
-{
-	char Fname[FMAX_PATH+1];
-
-	strcpy(Fname, GetFileName(Path));
-
-	GetUpperDirEraseTopSlash(Path);
-	ReformToVMSstyleDirName(Path);
-
-	strcat(Path, Fname);
-
-	return;
+// ファイル名をVAX VMSスタイルに変換する
+//   ddd:[xxx.yyy]/rrr/ppp  --> ddd:[xxx.yyy.rrr]ppp
+static std::wstring ReformToVMSstylePathName(std::wstring_view path) {
+	return ReformToVMSstyleDirName(std::wstring{ GetUpperDirEraseTopSlash(path) }) + GetFileName(path);
 }
-
-
-#if defined(HAVE_OPENVMS)
-/*----- VMSの"HOGE.DIR;?"というディレクトリ名から"HOGE"を取り出す ---------------
-*
-*	Parameter
-*		char *DirName : "HOGE.DIR;?"形式のディレクトリ名
-*		int Flg       : ";"のチェックをする(TRUE)かしない(FALSE)か
-*
-*	Return Value
-*		なし
-*
-*	Note
-*		DirNameを直接書きかえる
-*----------------------------------------------------------------------------*/
-
-void ReformVMSDirName(char *DirName, int Flg)
-{
-	char *p;
-
-	if (Flg == TRUE) {
-		/* ';'がない場合はVMS形式じゃなさそうなので何もしない */
-		if ((p = strrchr(DirName, ';')) == NULL)
-			return;
-	}
-
-	/* ".DIR"があったらつぶす */
-	if ((p = strrchr(DirName, '.'))) {
-		if (memcmp(p + 1, "DIR", 3) == 0)
-			*p = '\0';
-	}
-}
-#endif
 
 
 // ファイル名に使えない文字がないかチェックし名前を変更する
-//   Fnameを直接書きかえる
-static int RenameUnuseableName(char* Fname) {
-	static boost::regex re{ R"([:*?<>|"\\])" };
+static std::wstring RenameUnuseableName(std::wstring&& filename) {
 	for (;;) {
-		if (!boost::regex_search(Fname, re))
-			return FFFTP_SUCCESS;
-		if (!InputDialog(forcerename_dlg, GetMainHwnd(), NULL, Fname, FMAX_PATH + 1))
-			return FFFTP_FAIL;
+		if (filename.find_first_of(LR"(:*?<>|"\)"sv) == std::wstring::npos)
+			return filename;
+		if (!InputDialog(forcerename_dlg, GetMainHwnd(), 0, filename, FMAX_PATH + 1))
+			return {};
 	}
 }
 
@@ -2811,7 +2354,7 @@ void NoopProc(int Force)
 			if(Force == NO)
 				CancelFlg = NO;
 			DisableUserOpe();
-			DoDirListCmdSkt("", "", 999, &CancelFlg);
+			DoDirList(L""sv, 999, &CancelFlg);
 			EnableUserOpe();
 		}
 	}

@@ -48,7 +48,7 @@
 struct AsyncSignal {
 	int Event = 0;
 	int Error = 0;
-	std::variant<sockaddr_storage, std::tuple<std::string, int>> Target;
+	std::variant<sockaddr_storage, std::tuple<std::wstring, int>> Target;
 	int MapPort = 0;
 };
 
@@ -167,7 +167,7 @@ BOOL LoadSSL() {
 	//   有効になっているプロトコルを調べ、SSL 2.0が無効かつTLS 1.2が無効な場合は開き直す。
 	//   排他となるプロトコルがあるため、有効になっているプロトコルのうちSSL 3.0以降とTLS 1.2を指定してオープンする。
 	static_assert((SP_PROT_TLS1_1PLUS_CLIENT & ~(SP_PROT_TLS1_1_CLIENT | SP_PROT_TLS1_2_CLIENT | SP_PROT_TLS1_3_CLIENT)) == 0, "new tls version detected.");
-	if (auto ss = AcquireCredentialsHandleW(nullptr, UNISP_NAME_W, SECPKG_CRED_OUTBOUND, nullptr, nullptr, nullptr, nullptr, &credential, nullptr); ss != SEC_E_OK) {
+	if (auto ss = AcquireCredentialsHandleW(nullptr, const_cast<wchar_t*>(UNISP_NAME_W), SECPKG_CRED_OUTBOUND, nullptr, nullptr, nullptr, nullptr, &credential, nullptr); ss != SEC_E_OK) {
 		_RPTWN(_CRT_WARN, L"AcquireCredentialsHandle error: %08X.\n", ss);
 		return FALSE;
 	}
@@ -180,7 +180,7 @@ BOOL LoadSSL() {
 		FreeCredentialsHandle(&credential);
 		SCHANNEL_CRED sc{ SCHANNEL_CRED_VERSION };
 		sc.grbitEnabledProtocols = sp.grbitProtocol & (SP_PROT_SSL3_CLIENT | SP_PROT_TLS1_0_CLIENT | SP_PROT_TLS1_1_CLIENT | SP_PROT_TLS1_2_CLIENT | SP_PROT_TLS1_3_CLIENT) | SP_PROT_TLS1_2_CLIENT;
-		if (auto ss = AcquireCredentialsHandleW(nullptr, UNISP_NAME_W, SECPKG_CRED_OUTBOUND, nullptr, &sc, nullptr, nullptr, &credential, nullptr); ss != SEC_E_OK) {
+		if (auto ss = AcquireCredentialsHandleW(nullptr, const_cast<wchar_t*>(UNISP_NAME_W), SECPKG_CRED_OUTBOUND, nullptr, &sc, nullptr, nullptr, &credential, nullptr); ss != SEC_E_OK) {
 			_RPTWN(_CRT_WARN, L"AcquireCredentialsHandle error: %08X.\n", ss);
 			return FALSE;
 		}
@@ -307,11 +307,11 @@ static BOOL DetachSSL(SOCKET s) {
 }
 
 // SSLセッションを開始
-BOOL AttachSSL(SOCKET s, SOCKET parent, BOOL* pbAborted, const char* ServerName) {
+BOOL AttachSSL(SOCKET s, SOCKET parent, BOOL* pbAborted, std::wstring_view ServerName) {
 	assert(SecIsValidHandle(&credential));
 	std::wstring wServerName;
-	if (ServerName)
-		wServerName = IdnToAscii(u8(ServerName));
+	if (!empty(ServerName))
+		wServerName = IdnToAscii(ServerName);
 	else if (parent != INVALID_SOCKET)
 		if (auto context = getContext(parent))
 			wServerName = context->host;
@@ -336,7 +336,7 @@ BOOL AttachSSL(SOCKET s, SOCKET parent, BOOL* pbAborted, const char* ServerName)
 			for (;;) {
 				char buffer[8192];
 				if (auto read = recv(s, buffer, size_as<int>(buffer), 0); read == 0) {
-					DoPrintf("AttachSSL recv: connection closed.");
+					Debug(L"AttachSSL recv: connection closed."sv);
 					return FALSE;
 				} else if (0 < read) {
 					_RPTWN(_CRT_WARN, L"AttachSSL recv: %d bytes.\n", read);
@@ -344,7 +344,7 @@ BOOL AttachSSL(SOCKET s, SOCKET parent, BOOL* pbAborted, const char* ServerName)
 					break;
 				}
 				if (auto lastError = WSAGetLastError(); lastError != WSAEWOULDBLOCK) {
-					DoPrintf("AttachSSL recv error: %d.", lastError);
+					Debug(L"AttachSSL recv error: {}."sv, lastError);
 					return FALSE;
 				}
 				Sleep(0);
@@ -353,7 +353,7 @@ BOOL AttachSSL(SOCKET s, SOCKET parent, BOOL* pbAborted, const char* ServerName)
 			ss = InitializeSecurityContextW(&credential, &context, node, contextReq, 0, 0, &inDesc, 0, nullptr, &outDesc, &attr, nullptr);
 		}
 		if (FAILED(ss) && ss != SEC_E_INCOMPLETE_MESSAGE) {
-			DoPrintf("AttachSSL InitializeSecurityContext error: %08x.", ss);
+			Debug(L"AttachSSL InitializeSecurityContext error: 0x{:08X}."sv, ss);
 			return FALSE;
 		}
 		_RPTWN(_CRT_WARN, L"AttachSSL InitializeSecurityContext result: %08x, inBuffer: %d/%d, %d/%d/%p, outBuffer: %d/%d, %d/%d, attr: %08x.\n",
@@ -374,7 +374,7 @@ BOOL AttachSSL(SOCKET s, SOCKET parent, BOOL* pbAborted, const char* ServerName)
 	} while (ss == SEC_I_CONTINUE_NEEDED);
 
 	if (ss = QueryContextAttributesW(&context, SECPKG_ATTR_STREAM_SIZES, &streamSizes); ss != SEC_E_OK) {
-		DoPrintf("AttachSSL QueryContextAttributes(SECPKG_ATTR_STREAM_SIZES) error: %08x.", ss);
+		Debug(L"AttachSSL QueryContextAttributes(SECPKG_ATTR_STREAM_SIZES) error: 0x{:08X}."sv, ss);
 		return FALSE;
 	}
 
@@ -520,7 +520,7 @@ static void UnregisterAsyncTable(SOCKET s) {
 }
 
 
-void SetAsyncTableData(SOCKET s, std::variant<sockaddr_storage, std::tuple<std::string, int>> const& target) {
+void SetAsyncTableData(SOCKET s, std::variant<sockaddr_storage, std::tuple<std::wstring, int>> const& target) {
 	std::lock_guard lock{ SignalMutex };
 	if (auto it = Signal.find(s); it != end(Signal))
 		it->second.Target = target;
@@ -532,7 +532,7 @@ void SetAsyncTableDataMapPort(SOCKET s, int Port) {
 		it->second.MapPort = Port;
 }
 
-int GetAsyncTableData(SOCKET s, std::variant<sockaddr_storage, std::tuple<std::string, int>>& target) {
+int GetAsyncTableData(SOCKET s, std::variant<sockaddr_storage, std::tuple<std::wstring, int>>& target) {
 	std::lock_guard lock{ SignalMutex };
 	if (auto it = Signal.find(s); it != end(Signal)) {
 		target = it->second.Target;
@@ -554,7 +554,7 @@ int GetAsyncTableDataMapPort(SOCKET s, int* Port) {
 SOCKET do_socket(int af, int type, int protocol) {
 	auto s = socket(af, type, protocol);
 	if (s == INVALID_SOCKET) {
-		DoPrintf("socket: socket failed: 0x%08X", WSAGetLastError());
+		Debug(L"socket: socket failed: 0x{:08X}."sv, WSAGetLastError());
 		return INVALID_SOCKET;
 	}
 	RegisterAsyncTable(s);
@@ -580,20 +580,20 @@ int do_closesocket(SOCKET s) {
 
 int do_connect(SOCKET s, const sockaddr* name, int namelen, int* CancelCheckWork) {
 	if (WSAAsyncSelect(s, hWndSocket, WM_ASYNC_SOCKET, FD_CONNECT | FD_CLOSE | FD_ACCEPT) != 0) {
-		DoPrintf("connect: WSAAsyncSelect failed: 0x%08X", WSAGetLastError());
+		Debug(L"connect: WSAAsyncSelect failed: 0x{:08X}."sv, WSAGetLastError());
 		return SOCKET_ERROR;
 	}
 	if (connect(s, name, namelen) == 0)
 		return 0;
 	if (auto lastError = WSAGetLastError(); lastError != WSAEWOULDBLOCK) {
-		DoPrintf("connect: connect failed: 0x%08X", WSAGetLastError());
+		Debug(L"connect: connect failed: 0x{:08X}."sv, WSAGetLastError());
 		return SOCKET_ERROR;
 	}
 	while (*CancelCheckWork != YES) {
 		if (int error = 0; AskAsyncDone(s, &error, FD_CONNECT) == YES && error != WSAEWOULDBLOCK) {
 			if (error == 0)
 				return 0;
-			DoPrintf("connect: select error: 0x%08X", error);
+			Debug(L"connect: select error: 0x{:08X}."sv, error);
 			return SOCKET_ERROR;
 		}
 		Sleep(1);
@@ -606,11 +606,11 @@ int do_connect(SOCKET s, const sockaddr* name, int namelen, int* CancelCheckWork
 
 int do_listen(SOCKET s, int backlog) {
 	if (WSAAsyncSelect(s, hWndSocket, WM_ASYNC_SOCKET, FD_CLOSE | FD_ACCEPT) != 0) {
-		DoPrintf("listen: WSAAsyncSelect failed: 0x%08X", WSAGetLastError());
+		Debug(L"listen: WSAAsyncSelect failed: 0x{:08X}."sv, WSAGetLastError());
 		return SOCKET_ERROR;
 	}
 	if (listen(s, backlog) != 0) {
-		DoPrintf("listen: listen failed: 0x%08X", WSAGetLastError());
+		Debug(L"listen: listen failed: 0x{:08X}."sv, WSAGetLastError());
 		return SOCKET_ERROR;
 	}
 	return 0;
@@ -625,9 +625,6 @@ SOCKET do_accept(SOCKET s, struct sockaddr *addr, int *addrlen)
 	int CancelCheckWork;
 	int Error;
 
-#if DBG_MSG
-	DoPrintf("# Start accept (S=%x)", s);
-#endif
 	CancelCheckWork = NO;
 	Ret2 = INVALID_SOCKET;
 	Error = 0;
@@ -651,10 +648,6 @@ SOCKET do_accept(SOCKET s, struct sockaddr *addr, int *addrlen)
 			Ret2 = accept(s, addr, addrlen);
 			if(Ret2 != INVALID_SOCKET)
 			{
-#if DBG_MSG
-				DoPrintf("## do_sccept (S=%x)", Ret2);
-				DoPrintf("## Async set: FD_CONNECT|FD_CLOSE|FD_ACCEPT|FD_READ|FD_WRITE");
-#endif
 				RegisterAsyncTable(Ret2);
 				// 高速化のためFD_READとFD_WRITEを使用しない
 //				if(WSAAsyncSelect(Ret2, hWndSocket, WM_ASYNC_SOCKET, FD_CONNECT | FD_CLOSE | FD_ACCEPT | FD_READ | FD_WRITE) == SOCKET_ERROR)
@@ -672,10 +665,6 @@ SOCKET do_accept(SOCKET s, struct sockaddr *addr, int *addrlen)
 		}
 		while(Error == WSAEWOULDBLOCK);
 	}
-
-#if DBG_MSG
-	DoPrintf("# Exit accept");
-#endif
 	return(Ret2);
 #else
 	return(accept(s, addr, addrlen));
@@ -697,7 +686,7 @@ int do_recv(SOCKET s, char *buf, int len, int flags, int *TimeOutErr, int *Cance
 		if (BackgrndMessageProc() == YES)
 			return SOCKET_ERROR;
 		if (endTime && *endTime < std::chrono::steady_clock::now()) {
-			DoPrintf("do_recv timed out");
+			Debug(L"do_recv timed out."sv);
 			*TimeOutErr = YES;
 			*CancelCheckWork = YES;
 			return SOCKET_ERROR;
@@ -719,7 +708,7 @@ int SendData(SOCKET s, const char* buf, int len, int flags, int* CancelCheckWork
 	std::string_view buffer{ buf, size_t(len) };
 	if (auto context = getContext(s)) {
 		if (work = context->Encrypt(buffer); empty(work)) {
-			DoPrintf("send: EncryptMessage failed.");
+			Debug(L"send: EncryptMessage failed."sv);
 			return FFFTP_FAIL;
 		}
 		buffer = { data(work), size(work) };
@@ -734,17 +723,17 @@ int SendData(SOCKET s, const char* buf, int len, int flags, int* CancelCheckWork
 		if (0 < sent)
 			buffer = buffer.substr(sent);
 		else if (sent == 0) {
-			DoPrintf("send: connection closed.");
+			Debug(L"send: connection closed."sv);
 			return FFFTP_FAIL;
 		} else if (auto lastError = WSAGetLastError(); lastError != WSAEWOULDBLOCK) {
-			DoPrintf("send: send failed: 0x%08X", lastError);
+			Debug(L"send: send failed: 0x{:08X}."sv, lastError);
 			return FFFTP_FAIL;
 		}
 		Sleep(1);
 		if (BackgrndMessageProc() == YES || *CancelCheckWork == YES)
 			return FFFTP_FAIL;
 		if (endTime && *endTime < std::chrono::steady_clock::now()) {
-			SetTaskMsg(MSGJPN241);
+			SetTaskMsg(IDS_MSGJPN241);
 			*CancelCheckWork = YES;
 			return FFFTP_FAIL;
 		}
@@ -789,46 +778,39 @@ int IsUPnPLoaded() {
 	return upnpNAT && staticPortMappingCollection ? YES : NO;
 }
 
-int AddPortMapping(const char* Adrs, int Port, char* ExtAdrs) {
+
+std::optional<std::wstring> AddPortMapping(std::wstring const& internalAddress, int port) {
 	static _bstr_t TCP{ L"TCP" };
 	static _bstr_t FFFTP{ L"FFFTP" };
-	int result = FFFTP_FAIL;
-	if (IsMainThread()) {
-		if (ComPtr<IStaticPortMapping> staticPortMapping; staticPortMappingCollection->Add(Port, TCP, Port, _bstr_t{ Adrs }, VARIANT_TRUE, FFFTP, &staticPortMapping) == S_OK)
-			if (_bstr_t buffer; staticPortMapping->get_ExternalIPAddress(buffer.GetAddress()) == S_OK) {
-				strcpy(ExtAdrs, buffer);
-				return FFFTP_SUCCESS;
-			}
-	} else {
-		if (ADDPORTMAPPINGDATA Data; Data.h = CreateEventW(NULL, TRUE, FALSE, NULL)) {
-			Data.Adrs = Adrs;
-			Data.Port = Port;
-			Data.ExtAdrs = ExtAdrs;
-			if (PostMessageW(GetMainHwnd(), WM_ADDPORTMAPPING, 0, (LPARAM)&Data))
-				if (WaitForSingleObject(Data.h, INFINITE) == WAIT_OBJECT_0)
-					result = Data.r;
-			CloseHandle(Data.h);
+	struct Data : public MainThreadRunner {
+		long port;
+		std::wstring const& internalAddress;
+		_bstr_t externalAddress;
+		Data(std::wstring const& internalAddress, long port) : port{ port }, internalAddress{ internalAddress } {}
+		int DoWork() override {
+			ComPtr<IStaticPortMapping> staticPortMapping;
+			auto result = staticPortMappingCollection->Add(port, TCP, port, _bstr_t{ internalAddress.c_str() }, VARIANT_TRUE, FFFTP, &staticPortMapping);
+			if (result == S_OK)
+				result = staticPortMapping->get_ExternalIPAddress(externalAddress.GetAddress());
+			return result;
 		}
-	}
-	return result;
+	} data{ internalAddress, port };
+	if (auto result = (HRESULT)data.Run(); result == S_OK)
+		return { { (const wchar_t*)data.externalAddress, data.externalAddress.length() } };
+	return {};
 }
 
-int RemovePortMapping(int Port) {
+bool RemovePortMapping(int port) {
 	static _bstr_t TCP{ L"TCP" };
-	int result = FFFTP_FAIL;
-	if (IsMainThread()) {
-		if (staticPortMappingCollection->Remove(Port, TCP) == S_OK)
-			return FFFTP_SUCCESS;
-	} else {
-		if (REMOVEPORTMAPPINGDATA Data; Data.h = CreateEventW(NULL, TRUE, FALSE, NULL)) {
-			Data.Port = Port;
-			if (PostMessageW(GetMainHwnd(), WM_REMOVEPORTMAPPING, 0, (LPARAM)&Data))
-				if (WaitForSingleObject(Data.h, INFINITE) == WAIT_OBJECT_0)
-					result = Data.r;
-			CloseHandle(Data.h);
+	struct Data : public MainThreadRunner {
+		long port;
+		Data(long port) : port{ port } {}
+		int DoWork() override {
+			return staticPortMappingCollection->Remove(port, TCP);
 		}
-	}
-	return result;
+	} data{ port };
+	auto result = (HRESULT)data.Run();
+	return result == S_OK;
 }
 
 
@@ -845,9 +827,6 @@ int CheckClosedAndReconnect(void)
 {
 	int Error;
 	int Sts;
-
-//SetTaskMsg("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-
 	Sts = FFFTP_SUCCESS;
 	if(AskAsyncDone(AskCmdCtrlSkt(), &Error, FD_CLOSE) == YES)
 	{
@@ -863,9 +842,6 @@ int CheckClosedAndReconnectTrnSkt(SOCKET *Skt, int *CancelCheckWork)
 {
 	int Error;
 	int Sts;
-
-//SetTaskMsg("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-
 	Sts = FFFTP_SUCCESS;
 	if(AskAsyncDone(*Skt, &Error, FD_CLOSE) == YES)
 	{

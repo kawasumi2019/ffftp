@@ -30,42 +30,39 @@
 #include "common.h"
 
 
-static auto GetMultiTextFromList(HWND hdlg, int id) {
-	std::wstring lines;
-	std::wstring line;
-	for (int i = 0, count = (int)SendDlgItemMessageW(hdlg, id, LB_GETCOUNT, 0, 0); i < count; i++) {
+static auto GetStrings(HWND hdlg, int id) {
+	std::vector<std::wstring> strings;
+	auto count = (int)SendDlgItemMessageW(hdlg, id, LB_GETCOUNT, 0, 0);
+	strings.reserve(count);
+	std::wstring string;
+	for (int i = 0; i < count; i++) {
 		auto length = SendDlgItemMessageW(hdlg, id, LB_GETTEXTLEN, i, 0);
-		line.resize(length);
-		length = SendDlgItemMessageW(hdlg, id, LB_GETTEXT, i, (LPARAM)data(line));
-		lines.append(begin(line), begin(line) + length);
-		lines += L'\0';
+		string.resize(length);
+		length = SendDlgItemMessageW(hdlg, id, LB_GETTEXT, i, (LPARAM)data(string));
+		strings.emplace_back(data(string), length);
 	}
-	lines += L'\0';
-	return lines;
+	return strings;
 }
-static void AddFnameAttrToListView(HWND hDlg, char *Fname, char *Attr);
-static void GetFnameAttrFromListView(HWND hDlg, char *Buf);
+static void SetStrings(HWND hdlg, int id, std::vector<std::wstring> const& strings) {
+	for (auto const& string : strings)
+		SendDlgItemMessageW(hdlg, id, LB_ADDSTRING, 0, (LPARAM)string.c_str());
+}
 int GetDecimalText(HWND hDlg, int Ctrl);
-void SetDecimalText(HWND hDlg, int Ctrl, int Num);
 void CheckRange2(int *Cur, int Max, int Min);
-void AddTextToListBox(HWND hDlg, char *Str, int CtrlList, int BufSize);
-void SetMultiTextToList(HWND hDlg, int CtrlList, char *Text);
-void GetMultiTextFromList(HWND hDlg, int CtrlList, char *Buf, int BufSize);
 
 
 /* 設定値 */
-extern char UserMailAdrs[USER_MAIL_LEN+1];
-extern char ViewerName[VIEWERS][FMAX_PATH+1];
+extern std::wstring UserMailAdrs;
+extern std::wstring ViewerName[VIEWERS];
 extern int ConnectOnStart;
-extern int DebugConsole;
 extern int SaveWinPos;
-extern char AsciiExt[ASCII_EXT_LEN+1];
+extern std::vector<std::wstring> AsciiExt;
 extern int RecvMode;
 extern int SendMode;
 extern int MoveMode;
-extern char FwallHost[HOST_ADRS_LEN+1];
-extern char FwallUser[USER_NAME_LEN+1];
-extern char FwallPass[PASSWORD_LEN+1];
+extern std::wstring FwallHost;
+extern std::wstring FwallUser;
+extern std::wstring FwallPass;
 extern int FwallPort;
 extern int FwallType;
 extern int FwallDefault;
@@ -74,22 +71,21 @@ extern int FwallResolve;
 extern int FwallLower;
 extern int FwallDelimiter;
 extern int PasvDefault;
-extern char DefaultLocalPath[FMAX_PATH+1];
+extern std::wstring DefaultLocalPath;
 extern int SaveTimeStamp;
 extern int DclickOpen;
-extern SOUNDFILE Sound[SOUND_TYPES];
 extern int FnameCnv;
 extern int ConnectAndSet;
 extern int TimeOut;
 extern int RmEOF;
 extern int RegType;
-extern char MirrorNoTrn[MIRROR_LEN+1];
-extern char MirrorNoDel[MIRROR_LEN+1];
+extern std::vector<std::wstring> MirrorNoTrn;
+extern std::vector<std::wstring> MirrorNoDel;
 extern int MirrorFnameCnv;
 extern int RasClose;
 extern int RasCloseNotify;
 extern int FileHist;
-extern char DefAttrList[DEFATTRLIST_LEN+1];
+extern std::vector<std::wstring> DefAttrList;
 extern int QuickAnonymous;
 extern int PassToHist;
 extern int VaxSemicolon;
@@ -162,13 +158,13 @@ struct User {
 	static constexpr DWORD flag = PSP_HASHELP;
 	static INT_PTR OnInit(HWND hDlg) {
 		SendDlgItemMessageW(hDlg, USER_ADRS, EM_LIMITTEXT, PASSWORD_LEN, 0);
-		SetText(hDlg, USER_ADRS, u8(UserMailAdrs));
+		SetText(hDlg, USER_ADRS, UserMailAdrs);
 		return TRUE;
 	}
 	static INT_PTR OnNotify(HWND hDlg, NMHDR* nmh) {
 		switch (nmh->code) {
 		case PSN_APPLY:
-			strncpy_s(UserMailAdrs, USER_MAIL_LEN + 1, u8(GetText(hDlg, USER_ADRS)).c_str(), _TRUNCATE);
+			UserMailAdrs = GetText(hDlg, USER_ADRS);
 			return PSNRET_NOERROR;
 		case PSN_HELP:
 			ShowHelp(IDH_HELP_TOPIC_0000041);
@@ -183,7 +179,7 @@ struct Transfer1 {
 	static constexpr DWORD flag = PSP_HASHELP;
 	using ModeButton = RadioButton<TRMODE_AUTO, TRMODE_ASCII, TRMODE_BIN>;
 	static INT_PTR OnInit(HWND hDlg) {
-		SetMultiTextToList(hDlg, TRMODE_EXT_LIST, AsciiExt);
+		SetStrings(hDlg, TRMODE_EXT_LIST, AsciiExt);
 		ModeButton::Set(hDlg, AskTransferType());
 		SendDlgItemMessageW(hDlg, TRMODE_TIME, BM_SETCHECK, SaveTimeStamp, 0);
 		SendDlgItemMessageW(hDlg, TRMODE_EOF, BM_SETCHECK, RmEOF, 0);
@@ -198,7 +194,7 @@ struct Transfer1 {
 		case PSN_APPLY:
 			SetTransferTypeImm(ModeButton::Get(hDlg));
 			SaveTransferType();
-			GetMultiTextFromList(hDlg, TRMODE_EXT_LIST, AsciiExt, ASCII_EXT_LEN + 1);
+			AsciiExt = GetStrings(hDlg, TRMODE_EXT_LIST);
 			SaveTimeStamp = (int)SendDlgItemMessageW(hDlg, TRMODE_TIME, BM_GETCHECK, 0, 0);
 			RmEOF = (int)SendDlgItemMessageW(hDlg, TRMODE_EOF, BM_GETCHECK, 0, 0);
 			VaxSemicolon = (int)SendDlgItemMessageW(hDlg, TRMODE_SEMICOLON, BM_GETCHECK, 0, 0);
@@ -225,8 +221,8 @@ struct Transfer1 {
 			EnableWindow(GetDlgItem(hDlg, TRMODE_DEL), TRUE);
 			break;
 		case TRMODE_ADD:
-			if (char Tmp[FMAX_PATH + 1] = ""; InputDialog(fname_in_dlg, hDlg, MSGJPN199, Tmp, FMAX_PATH))
-				AddTextToListBox(hDlg, Tmp, TRMODE_EXT_LIST, ASCII_EXT_LEN + 1);
+			if (std::wstring text; InputDialog(fname_in_dlg, hDlg, IDS_MSGJPN199, text, FMAX_PATH))
+				SendDlgItemMessageW(hDlg, TRMODE_EXT_LIST, LB_ADDSTRING, 0, (LPARAM)text.c_str());
 			break;
 		case TRMODE_DEL:
 			if (auto Num = (int)SendDlgItemMessageW(hDlg, TRMODE_EXT_LIST, LB_GETCURSEL, 0, 0); Num != LB_ERR)
@@ -242,19 +238,17 @@ struct Transfer2 {
 	using CnvButton = RadioButton<TRMODE2_NOCNV, TRMODE2_LOWER, TRMODE2_UPPER>;
 	static INT_PTR OnInit(HWND hDlg) {
 		SendDlgItemMessageW(hDlg, TRMODE2_LOCAL, EM_LIMITTEXT, FMAX_PATH, 0);
-		SetText(hDlg, TRMODE2_LOCAL, u8(DefaultLocalPath));
+		SetText(hDlg, TRMODE2_LOCAL, DefaultLocalPath);
 		CnvButton::Set(hDlg, FnameCnv);
 		SendDlgItemMessageW(hDlg, TRMODE2_TIMEOUT, EM_LIMITTEXT, (WPARAM)5, 0);
-		char Tmp[FMAX_PATH + 1];
-		sprintf(Tmp, "%d", TimeOut);
-		SetText(hDlg, TRMODE2_TIMEOUT, u8(Tmp));
+		SetText(hDlg, TRMODE2_TIMEOUT, std::to_wstring(TimeOut));
 		SendDlgItemMessageW(hDlg, TRMODE2_TIMEOUT_SPN, UDM_SETRANGE, 0, MAKELONG(300, 0));
 		return TRUE;
 	}
 	static INT_PTR OnNotify(HWND hDlg, NMHDR* nmh) {
 		switch (nmh->code) {
 		case PSN_APPLY: {
-			strncpy_s(DefaultLocalPath, FMAX_PATH + 1, u8(GetText(hDlg, TRMODE2_LOCAL)).c_str(), _TRUNCATE);
+			DefaultLocalPath = GetText(hDlg, TRMODE2_LOCAL);
 			FnameCnv = CnvButton::Get(hDlg);
 			TimeOut = GetDecimalText(hDlg, TRMODE2_TIMEOUT);
 			CheckRange2(&TimeOut, 300, 0);
@@ -269,8 +263,8 @@ struct Transfer2 {
 	static void OnCommand(HWND hDlg, WORD id) {
 		switch (id) {
 		case TRMODE2_LOCAL_BR:
-			if (char Tmp[FMAX_PATH + 1]; SelectDir(hDlg, Tmp, FMAX_PATH) == TRUE)
-				SetText(hDlg, TRMODE2_LOCAL, u8(Tmp));
+			if (auto path = SelectDir(hDlg); !path.empty())
+				SetText(hDlg, TRMODE2_LOCAL, path);
 			break;
 		}
 	}
@@ -279,6 +273,15 @@ struct Transfer2 {
 struct Transfer3 {
 	static constexpr WORD dialogId = opt_trmode3_dlg;
 	static constexpr DWORD flag = PSP_HASHELP;
+	static void AddRow(HWND hDlg, std::wstring const& name, std::wstring const& attr) {
+		if (empty(name) || empty(attr))
+			return;
+		LVITEMW item;
+		item = { .mask = LVIF_TEXT, .iItem = std::numeric_limits<int>::max(), .pszText = const_cast<LPWSTR>(name.c_str()) };
+		auto index = (int)SendDlgItemMessageW(hDlg, TRMODE3_LIST, LVM_INSERTITEMW, 0, (LPARAM)&item);
+		item = { .mask = LVIF_TEXT, .iItem = index, .iSubItem = 1, .pszText = const_cast<LPWSTR>(name.c_str()) };
+		SendDlgItemMessageW(hDlg, TRMODE3_LIST, LVM_SETITEMW, 0, (LPARAM)&item);
+	}
 	static INT_PTR OnInit(HWND hDlg) {
 		SendDlgItemMessageW(hDlg, TRMODE3_LIST, LVM_SETEXTENDEDLISTVIEWSTYLE, LVS_EX_FULLROWSELECT, LVS_EX_FULLROWSELECT);
 
@@ -296,28 +299,33 @@ struct Transfer3 {
 			SendDlgItemMessageW(hDlg, TRMODE3_LIST, LVM_INSERTCOLUMNW, i++, (LPARAM)&column);
 		}
 
-		auto Fname = DefAttrList;
-		while (*Fname != NUL) {
-			auto Attr = strchr(Fname, NUL) + 1;
-			if (*Attr != NUL)
-				AddFnameAttrToListView(hDlg, Fname, Attr);
-			Fname = strchr(Attr, NUL) + 1;
-		}
+		for (size_t i = 0; i < size(DefAttrList); i += 2)
+			AddRow(hDlg, DefAttrList[i], DefAttrList[i + 1]);
 
 		SendDlgItemMessageW(hDlg, TRMODE3_FOLDER, BM_SETCHECK, FolderAttr, 0);
 		if (FolderAttr == NO)
 			EnableWindow(GetDlgItem(hDlg, TRMODE3_FOLDER_ATTR), FALSE);
 
 		SendDlgItemMessageW(hDlg, TRMODE3_FOLDER_ATTR, EM_LIMITTEXT, (WPARAM)5, 0);
-		char TmpStr[10];
-		sprintf(TmpStr, "%03d", FolderAttrNum);
-		SetText(hDlg, TRMODE3_FOLDER_ATTR, u8(TmpStr));
+		SetText(hDlg, TRMODE3_FOLDER_ATTR, std::format(L"{:03d}"sv, FolderAttrNum));
 		return TRUE;
 	}
 	static INT_PTR OnNotify(HWND hDlg, NMHDR* nmh) {
 		switch (nmh->code) {
 		case PSN_APPLY: {
-			GetFnameAttrFromListView(hDlg, DefAttrList);
+			DefAttrList.clear();
+			auto count = (int)SendDlgItemMessageW(hDlg, TRMODE3_LIST, LVM_GETITEMCOUNT, 0, 0);
+			DefAttrList.reserve((size_t)count * 2);
+			for (int i = 0; i < count; i++) {
+				LVITEMW item;
+				wchar_t buffer[260 + 1];
+				item = { .mask = LVIF_TEXT, .iItem = i, .iSubItem = 0, .pszText = buffer, .cchTextMax = size_as<int>(buffer) };
+				SendDlgItemMessageW(hDlg, TRMODE3_LIST, LVM_GETITEMW, 0, (LPARAM)&item);
+				DefAttrList.emplace_back(item.pszText);
+				item = { .mask = LVIF_TEXT, .iItem = i, .iSubItem = 1, .pszText = buffer, .cchTextMax = size_as<int>(buffer) };
+				SendDlgItemMessageW(hDlg, TRMODE3_LIST, LVM_GETITEMW, 0, (LPARAM)&item);
+				DefAttrList.emplace_back(item.pszText);
+			}
 			FolderAttrNum = GetDecimalText(hDlg, TRMODE3_FOLDER_ATTR);
 			FolderAttr = (int)SendDlgItemMessageW(hDlg, TRMODE3_FOLDER, BM_GETCHECK, 0, 0);
 			return PSNRET_NOERROR;
@@ -331,8 +339,8 @@ struct Transfer3 {
 	static void OnCommand(HWND hDlg, WORD id) {
 		switch (id) {
 		case TRMODE3_ADD:
-			if (DefAttr data; Dialog(GetFtpInst(), def_attr_dlg, hDlg, data) && !empty(data.filename) && !empty(data.attr))
-				AddFnameAttrToListView(hDlg, const_cast<char*>(u8(data.filename).c_str()), const_cast<char*>(u8(data.attr).c_str()));
+			if (DefAttr data; Dialog(GetFtpInst(), def_attr_dlg, hDlg, data))
+				AddRow(hDlg, data.filename, data.attr);
 			break;
 		case TRMODE3_DEL:
 			if (auto Tmp = (long)SendDlgItemMessageW(hDlg, TRMODE3_LIST, LVM_GETNEXTITEM, -1, LVNI_ALL | LVNI_SELECTED); Tmp != -1)
@@ -382,8 +390,8 @@ struct Mirroring {
 	static constexpr WORD dialogId = opt_mirror_dlg;
 	static constexpr DWORD flag = PSP_HASHELP;
 	static INT_PTR OnInit(HWND hDlg) {
-		SetMultiTextToList(hDlg, MIRROR_NOTRN_LIST, MirrorNoTrn);
-		SetMultiTextToList(hDlg, MIRROR_NODEL_LIST, MirrorNoDel);
+		SetStrings(hDlg, MIRROR_NOTRN_LIST, MirrorNoTrn);
+		SetStrings(hDlg, MIRROR_NODEL_LIST, MirrorNoDel);
 		SendDlgItemMessageW(hDlg, MIRROR_LOW, BM_SETCHECK, MirrorFnameCnv, 0);
 		SendDlgItemMessageW(hDlg, MIRROR_UPDEL_NOTIFY, BM_SETCHECK, MirUpDelNotify, 0);
 		SendDlgItemMessageW(hDlg, MIRROR_DOWNDEL_NOTIFY, BM_SETCHECK, MirDownDelNotify, 0);
@@ -393,8 +401,8 @@ struct Mirroring {
 	static INT_PTR OnNotify(HWND hDlg, NMHDR* nmh) {
 		switch (nmh->code) {
 		case PSN_APPLY:
-			GetMultiTextFromList(hDlg, MIRROR_NOTRN_LIST, MirrorNoTrn, MIRROR_LEN + 1);
-			GetMultiTextFromList(hDlg, MIRROR_NODEL_LIST, MirrorNoDel, MIRROR_LEN + 1);
+			MirrorNoTrn = GetStrings(hDlg, MIRROR_NOTRN_LIST);
+			MirrorNoDel = GetStrings(hDlg, MIRROR_NODEL_LIST);
 			MirrorFnameCnv = (int)SendDlgItemMessageW(hDlg, MIRROR_LOW, BM_GETCHECK, 0, 0);
 			MirUpDelNotify = (int)SendDlgItemMessageW(hDlg, MIRROR_UPDEL_NOTIFY, BM_GETCHECK, 0, 0);
 			MirDownDelNotify = (int)SendDlgItemMessageW(hDlg, MIRROR_DOWNDEL_NOTIFY, BM_GETCHECK, 0, 0);
@@ -409,12 +417,12 @@ struct Mirroring {
 	static void OnCommand(HWND hDlg, WORD id) {
 		switch (id) {
 		case MIRROR_NOTRN_ADD:
-			if (char Tmp[FMAX_PATH + 1] = ""; InputDialog(fname_in_dlg, hDlg, MSGJPN202, Tmp, FMAX_PATH))
-				AddTextToListBox(hDlg, Tmp, MIRROR_NOTRN_LIST, MIRROR_LEN + 1);
+			if (std::wstring text; InputDialog(fname_in_dlg, hDlg, IDS_MSGJPN199, text, FMAX_PATH))
+				SendDlgItemMessageW(hDlg, MIRROR_NOTRN_LIST, LB_ADDSTRING, 0, (LPARAM)text.c_str());
 			break;
 		case MIRROR_NODEL_ADD:
-			if (char Tmp[FMAX_PATH + 1] = ""; InputDialog(fname_in_dlg, hDlg, MSGJPN203, Tmp, FMAX_PATH))
-				AddTextToListBox(hDlg, Tmp, MIRROR_NODEL_LIST, MIRROR_LEN + 1);
+			if (std::wstring text; InputDialog(fname_in_dlg, hDlg, IDS_MSGJPN199, text, FMAX_PATH))
+				SendDlgItemMessageW(hDlg, MIRROR_NODEL_LIST, LB_ADDSTRING, 0, (LPARAM)text.c_str());
 			break;
 		case MIRROR_NOTRN_DEL:
 			if (auto Num = (int)SendDlgItemMessageW(hDlg, MIRROR_NOTRN_LIST, LB_GETCURSEL, 0, 0); Num != LB_ERR)
@@ -539,7 +547,7 @@ struct Connecting {
 		if (RasClose == NO || NoRasControl != NO)
 			EnableWindow(GetDlgItem(hDlg, CONNECT_CLOSE_NOTIFY), FALSE);
 		SendDlgItemMessageW(hDlg, CONNECT_HIST, EM_LIMITTEXT, (WPARAM)2, 0);
-		SetDecimalText(hDlg, CONNECT_HIST, FileHist);
+		SetText(hDlg, CONNECT_HIST, std::to_wstring(FileHist));
 		SendDlgItemMessageW(hDlg, CONNECT_HIST_SPN, UDM_SETRANGE, 0, (LPARAM)MAKELONG(HISTORY_MAX, 0));
 		SendDlgItemMessageW(hDlg, CONNECT_QUICK_ANONY, BM_SETCHECK, QuickAnonymous, 0);
 		SendDlgItemMessageW(hDlg, CONNECT_HIST_PASS, BM_SETCHECK, PassToHist, 0);
@@ -608,14 +616,11 @@ struct Firewall {
 		SendDlgItemMessageW(hDlg, FIRE_PORT, EM_LIMITTEXT, 5, 0);
 		SendDlgItemMessageW(hDlg, FIRE_DELIMIT, EM_LIMITTEXT, 1, 0);
 
-		SetText(hDlg, FIRE_HOST, u8(FwallHost));
-		SetText(hDlg, FIRE_USER, u8(FwallUser));
-		SetText(hDlg, FIRE_PASS, u8(FwallPass));
-		char Tmp[10];
-		sprintf(Tmp, "%d", FwallPort);
-		SetText(hDlg, FIRE_PORT, u8(Tmp));
-		sprintf(Tmp, "%c", FwallDelimiter);
-		SetText(hDlg, FIRE_DELIMIT, u8(Tmp));
+		SetText(hDlg, FIRE_HOST, FwallHost);
+		SetText(hDlg, FIRE_USER, FwallUser);
+		SetText(hDlg, FIRE_PASS, FwallPass);
+		SetText(hDlg, FIRE_PORT,std::to_wstring(FwallPort));
+		SetText(hDlg, FIRE_DELIMIT, std::wstring{ (wchar_t)FwallDelimiter });
 
 		SendDlgItemMessageW(hDlg, FIRE_USEIT, BM_SETCHECK, FwallDefault, 0);
 		SendDlgItemMessageW(hDlg, FIRE_PASV, BM_SETCHECK, PasvDefault, 0);
@@ -634,9 +639,9 @@ struct Firewall {
 		case PSN_APPLY: {
 			auto Type = (int)SendDlgItemMessageW(hDlg, FIRE_TYPE, CB_GETCURSEL, 0, 0) + 1;
 			FwallType = firewallTypes[Type];
-			strncpy_s(FwallHost, HOST_ADRS_LEN + 1, u8(GetText(hDlg, FIRE_HOST)).c_str(), _TRUNCATE);
-			strncpy_s(FwallUser, USER_NAME_LEN + 1, u8(GetText(hDlg, FIRE_USER)).c_str(), _TRUNCATE);
-			strncpy_s(FwallPass, PASSWORD_LEN, u8(GetText(hDlg, FIRE_PASS)).c_str(), _TRUNCATE);
+			FwallHost = GetText(hDlg, FIRE_HOST);
+			FwallUser = GetText(hDlg, FIRE_USER);
+			FwallPass = GetText(hDlg, FIRE_PASS);
 			FwallPort = GetDecimalText(hDlg, FIRE_PORT);
 			FwallDelimiter = u8(GetText(hDlg, FIRE_DELIMIT))[0];
 			FwallDefault = (int)SendDlgItemMessageW(hDlg, FIRE_USEIT, BM_GETCHECK, 0, 0);
@@ -676,17 +681,17 @@ struct Tool {
 		SendDlgItemMessageW(hDlg, TOOL_EDITOR1, EM_LIMITTEXT, FMAX_PATH, 0);
 		SendDlgItemMessageW(hDlg, TOOL_EDITOR2, EM_LIMITTEXT, FMAX_PATH, 0);
 		SendDlgItemMessageW(hDlg, TOOL_EDITOR3, EM_LIMITTEXT, FMAX_PATH, 0);
-		SetText(hDlg, TOOL_EDITOR1, u8(ViewerName[0]));
-		SetText(hDlg, TOOL_EDITOR2, u8(ViewerName[1]));
-		SetText(hDlg, TOOL_EDITOR3, u8(ViewerName[2]));
+		SetText(hDlg, TOOL_EDITOR1, ViewerName[0]);
+		SetText(hDlg, TOOL_EDITOR2, ViewerName[1]);
+		SetText(hDlg, TOOL_EDITOR3, ViewerName[2]);
 		return TRUE;
 	}
 	static INT_PTR OnNotify(HWND hDlg, NMHDR* nmh) {
 		switch (nmh->code) {
 		case PSN_APPLY:
-			strncpy_s(ViewerName[0], FMAX_PATH + 1, u8(GetText(hDlg, TOOL_EDITOR1)).c_str(), _TRUNCATE);
-			strncpy_s(ViewerName[1], FMAX_PATH + 1, u8(GetText(hDlg, TOOL_EDITOR2)).c_str(), _TRUNCATE);
-			strncpy_s(ViewerName[2], FMAX_PATH + 1, u8(GetText(hDlg, TOOL_EDITOR3)).c_str(), _TRUNCATE);
+			ViewerName[0] = GetText(hDlg, TOOL_EDITOR1);
+			ViewerName[1] = GetText(hDlg, TOOL_EDITOR2);
+			ViewerName[2] = GetText(hDlg, TOOL_EDITOR3);
 			return PSNRET_NOERROR;
 		case PSN_HELP:
 			ShowHelp(IDH_HELP_TOPIC_0000050);
@@ -712,70 +717,6 @@ struct Tool {
 					break;
 				}
 			}
-			break;
-		}
-	}
-};
-
-struct Sounds {
-	static constexpr WORD dialogId = opt_sound_dlg;
-	static constexpr DWORD flag = PSP_HASHELP;
-	static INT_PTR OnInit(HWND hDlg) {
-		SendDlgItemMessageW(hDlg, SOUND_CONNECT, BM_SETCHECK, Sound[SND_CONNECT].On, 0);
-		SendDlgItemMessageW(hDlg, SOUND_TRANS, BM_SETCHECK, Sound[SND_TRANS].On, 0);
-		SendDlgItemMessageW(hDlg, SOUND_ERROR, BM_SETCHECK, Sound[SND_ERROR].On, 0);
-
-		SendDlgItemMessageW(hDlg, SOUND_CONNECT_WAV, EM_LIMITTEXT, (WPARAM)FMAX_PATH, 0);
-		SendDlgItemMessageW(hDlg, SOUND_TRANS_WAV, EM_LIMITTEXT, (WPARAM)FMAX_PATH, 0);
-		SendDlgItemMessageW(hDlg, SOUND_ERROR_WAV, EM_LIMITTEXT, (WPARAM)FMAX_PATH, 0);
-		SetText(hDlg, SOUND_CONNECT_WAV, u8(Sound[SND_CONNECT].Fname));
-		SetText(hDlg, SOUND_TRANS_WAV, u8(Sound[SND_TRANS].Fname));
-		SetText(hDlg, SOUND_ERROR_WAV, u8(Sound[SND_ERROR].Fname));
-		return TRUE;
-	}
-	static INT_PTR OnNotify(HWND hDlg, NMHDR* nmh) {
-		switch (nmh->code) {
-		case PSN_APPLY:
-			Sound[SND_CONNECT].On = (int)SendDlgItemMessageW(hDlg, SOUND_CONNECT, BM_GETCHECK, 0, 0);
-			Sound[SND_TRANS].On = (int)SendDlgItemMessageW(hDlg, SOUND_TRANS, BM_GETCHECK, 0, 0);
-			Sound[SND_ERROR].On = (int)SendDlgItemMessageW(hDlg, SOUND_ERROR, BM_GETCHECK, 0, 0);
-			strncpy_s(Sound[SND_CONNECT].Fname, FMAX_PATH + 1, u8(GetText(hDlg, SOUND_CONNECT_WAV)).c_str(), _TRUNCATE);
-			strncpy_s(Sound[SND_TRANS].Fname, FMAX_PATH + 1, u8(GetText(hDlg, SOUND_TRANS_WAV)).c_str(), _TRUNCATE);
-			strncpy_s(Sound[SND_ERROR].Fname, FMAX_PATH + 1, u8(GetText(hDlg, SOUND_ERROR_WAV)).c_str(), _TRUNCATE);
-			return PSNRET_NOERROR;
-		case PSN_HELP:
-			ShowHelp(IDH_HELP_TOPIC_0000051);
-			break;
-		}
-		return 0;
-	}
-	static void OnCommand(HWND hDlg, WORD id) {
-		switch (id) {
-		case SOUND_CONNECT_BR:
-		case SOUND_TRANS_BR:
-		case SOUND_ERROR_BR:
-			if (auto const path = SelectFile(true, hDlg, IDS_SELECT_AUDIOFILE, L"", nullptr, { FileType::Audio, FileType::All }); !std::empty(path)) {
-				switch (id) {
-				case SOUND_CONNECT_BR:
-					SetText(hDlg, SOUND_CONNECT_WAV, path);
-					break;
-				case SOUND_TRANS_BR:
-					SetText(hDlg, SOUND_TRANS_WAV, path);
-					break;
-				case SOUND_ERROR_BR:
-					SetText(hDlg, SOUND_ERROR_WAV, path);
-					break;
-				}
-			}
-			break;
-		case SOUND_CONNECT_TEST:
-			sndPlaySoundW(GetText(hDlg, SOUND_CONNECT_WAV).c_str(), SND_ASYNC | SND_NODEFAULT);
-			break;
-		case SOUND_TRANS_TEST:
-			sndPlaySoundW(GetText(hDlg, SOUND_TRANS_WAV).c_str(), SND_ASYNC | SND_NODEFAULT);
-			break;
-		case SOUND_ERROR_TEST:
-			sndPlaySoundW(GetText(hDlg, SOUND_ERROR_WAV).c_str(), SND_ASYNC | SND_NODEFAULT);
 			break;
 		}
 	}
@@ -808,69 +749,21 @@ struct Other {
 		}
 		return 0;
 	}
+	static void OnCommand(HWND hDlg, WORD id) {
+		switch (id) {
+		case IDC_OPENSOUNDS:
+		{
+			// Executing Control Panel Items <https://docs.microsoft.com/en-us/windows/win32/shell/executing-control-panel-items>
+			WinExec(strprintf("%s mmsys.cpl,,2", (systemDirectory() / L"control.exe").string().c_str()).c_str(), SW_NORMAL);
+			break;
+		}
+		}
+	}
 };
 
 // オプションのプロパティシート
 void SetOption() {
-	PropSheet<User, Transfer1, Transfer2, Transfer3, Transfer4, Mirroring, Operation, View1, View2, Connecting, Firewall, Tool, Sounds, Other>(GetMainHwnd(), GetFtpInst(), IDS_OPTION, PSH_NOAPPLYNOW | PSH_NOCONTEXTHELP);
-}
-
-
-/*----- ファイル名と属性をリストビューに追加 ----------------------------------
-*
-*	Parameter
-*		HWND hDlg : ウインドウハンドル
-*		char *Fname : ファイル名
-*		char *Attr : 属性
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-static void AddFnameAttrToListView(HWND hDlg, char* Fname, char* Attr) {
-	char Buf[DEFATTRLIST_LEN + 1];
-	GetFnameAttrFromListView(hDlg, Buf);
-	if (StrMultiLen(Buf) + strlen(Fname) + strlen(Attr) + 2 <= DEFATTRLIST_LEN) {
-		auto wFname = u8(Fname);
-		LVITEMW item = { .mask = LVIF_TEXT, .iItem = std::numeric_limits<int>::max(), .pszText = data(wFname) };
-		auto index = (int)SendDlgItemMessageW(hDlg, TRMODE3_LIST, LVM_INSERTITEMW, 0, (LPARAM)&item);
-		auto wAttr = u8(Attr);
-		item = { .mask = LVIF_TEXT, .iItem = index, .iSubItem = 1, .pszText = data(wAttr) };
-		SendDlgItemMessageW(hDlg, TRMODE3_LIST, LVM_SETITEMW, 0, (LPARAM)&item);
-	} else
-		MessageBeep(-1);
-}
-
-
-/*----- リストビューの内容をマルチ文字列にする --------------------------------
-*
-*	Parameter
-*		HWND hDlg : ダイアログボックスのウインドウハンドル
-*		int CtrlList : リストボックスのID
-*		char *Buf : 文字列をセットするバッファ
-*		int BufSize : バッファのサイズ
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-static void GetFnameAttrFromListView(HWND hDlg, char* Buf) {
-	std::wstring lines;
-	wchar_t buffer[260 + 1];
-	LVITEMW item;
-	for (int i = 0, count = (int)SendDlgItemMessageW(hDlg, TRMODE3_LIST, LVM_GETITEMCOUNT, 0, 0); i < count; i++) {
-		item = { .mask = LVIF_TEXT, .iItem = i, .iSubItem = 0, .pszText = buffer, .cchTextMax = size_as<int>(buffer) };
-		SendDlgItemMessageW(hDlg, TRMODE3_LIST, LVM_GETITEMW, 0, (LPARAM)&item);
-		lines += buffer;
-		lines += L'\0';
-		item = { .mask = LVIF_TEXT, .iItem = i, .iSubItem = 1, .pszText = buffer, .cchTextMax = size_as<int>(buffer) };
-		SendDlgItemMessageW(hDlg, TRMODE3_LIST, LVM_GETITEMW, 0, (LPARAM)&item);
-		lines += buffer;
-		lines += L'\0';
-	}
-	lines += L'\0';
-	auto u8lines = u8(lines);
-	std::copy(begin(u8lines), end(u8lines), Buf);
+	PropSheet<User, Transfer1, Transfer2, Transfer3, Transfer4, Mirroring, Operation, View1, View2, Connecting, Firewall, Tool, Other>(GetMainHwnd(), GetFtpInst(), IDS_OPTION, PSH_NOAPPLYNOW | PSH_NOCONTEXTHELP);
 }
 
 
@@ -934,29 +827,6 @@ int GetDecimalText(HWND hDlg, int Ctrl) {
 }
 
 
-/*----- ダイアログのコントロールに１０進数をセット ----------------------------
-*
-*	Parameter
-*		HWND hDlg : ウインドウハンドル
-*		int Ctrl : コントロールのID
-*		int Num : 数値
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-// hostman.cで使用
-//static void SetDecimalText(HWND hDlg, int Ctrl, int Num)
-void SetDecimalText(HWND hDlg, int Ctrl, int Num)
-{
-	char Tmp[40];
-
-	sprintf(Tmp, "%d", Num);
-	SetText(hDlg, Ctrl, u8(Tmp));
-	return;
-}
-
-
 /*----- 設定値の範囲チェック --------------------------------------------------
 *
 *	Parameter
@@ -980,71 +850,4 @@ void CheckRange2(int *Cur, int Max, int Min)
 	if(*Cur > Max)
 		*Cur = Max;
 	return;
-}
-
-
-/*----- 文字列をリストボックスに追加 ------------------------------------------
-*
-*	Parameter
-*		HWND hDlg : ダイアログボックスのウインドウハンドル
-*		char *Str : 文字列
-*		int CtrlList : リストボックスのID
-*		int BufSize : バッファサイズ
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-void AddTextToListBox(HWND hDlg, char* Str, int CtrlList, int BufSize) {
-	if (int Len = (int)strlen(Str); Len > 0) {
-		Len += 1 + size_as<int>(u8(GetMultiTextFromList(hDlg, CtrlList)));
-		if (Len > (BufSize - 1))
-			MessageBeep(-1);
-		else
-			SendDlgItemMessageW(hDlg, CtrlList, LB_ADDSTRING, 0, (LPARAM)u8(Str).c_str());
-	}
-}
-
-
-/*----- マルチ文字列をリストボックスにセット ----------------------------------
-*
-*	Parameter
-*		HWND hDlg : ダイアログボックスのウインドウハンドル
-*		int CtrlList : リストボックスのID
-*		char *Text : 文字列
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-// hostman.cで使用
-//static void SetMultiTextToList(HWND hDlg, int CtrlList, char *Text)
-void SetMultiTextToList(HWND hDlg, int CtrlList, char *Text)
-{
-	char *Pos;
-
-	Pos = Text;
-	while(*Pos != NUL)
-	{
-		SendDlgItemMessageW(hDlg, CtrlList, LB_ADDSTRING, 0, (LPARAM)u8(Pos).c_str());
-		Pos += strlen(Pos) + 1;
-	}
-	return;
-}
-
-
-/*----- リストボックスの内容をマルチ文字列にする ------------------------------
-*
-*	Parameter
-*		HWND hDlg : ダイアログボックスのウインドウハンドル
-*		int CtrlList : リストボックスのID
-*		char *Buf : 文字列をセットするバッファ
-*		int BufSize : バッファのサイズ
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-void GetMultiTextFromList(HWND hDlg, int CtrlList, char* Buf, int BufSize) {
-	auto u8lines = u8(GetMultiTextFromList(hDlg, CtrlList));
-	memset(Buf, 0, BufSize);
-	memcpy(Buf, u8lines.c_str(), std::min(size(u8lines), (size_t)BufSize));
 }

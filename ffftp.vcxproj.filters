@@ -16,18 +16,12 @@
     <Filter Include="Document Files">
       <UniqueIdentifier>{d42ab6d8-690f-4b17-9d7a-25603bbd5801}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Header Files\wrl">
-      <UniqueIdentifier>{7d801498-d6e9-4a83-93f3-b3b3b505fe44}</UniqueIdentifier>
-    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="bookmark.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="cache.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="codecnv.cpp">
@@ -112,9 +106,6 @@
     <ClInclude Include="OleDragDrop.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="mesg-jpn.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="helpid.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -124,14 +115,8 @@
     <ClInclude Include="dialog.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="wrl\client.h">
-      <Filter>Header Files\wrl</Filter>
-    </ClInclude>
-    <ClInclude Include="wrl\def.h">
-      <Filter>Header Files\wrl</Filter>
-    </ClInclude>
-    <ClInclude Include="wrl\implements.h">
-      <Filter>Header Files\wrl</Filter>
+    <ClInclude Include="filelist.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -158,18 +143,6 @@
     </Image>
   </ItemGroup>
   <ItemGroup>
-    <None Include="Resource\cursor1.cur">
-      <Filter>Resource Files</Filter>
-    </None>
-    <None Include="Resource\cursor2.cur">
-      <Filter>Resource Files</Filter>
-    </None>
-    <None Include="Resource\drag_csr.cur">
-      <Filter>Resource Files</Filter>
-    </None>
-    <None Include="Resource\nodrop_c.cur">
-      <Filter>Resource Files</Filter>
-    </None>
     <None Include="Resource\ffftp.exe.manifest">
       <Filter>Resource Files</Filter>
     </None>

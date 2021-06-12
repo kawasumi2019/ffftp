@@ -297,10 +297,10 @@ FONT 9, DIALOGFONT, 0, 0, 0x1
 BEGIN
     DEFPUSHBUTTON   "OK",IDOK,145,246,50,14
     ICON            ffftp,-1,7,4,20,20
-    CTEXT           "FFFTP Ver 4.7",-1,113,11,90,8
+    CTEXT           "FFFTP Ver 5.1",-1,113,11,90,8
     CTEXT           "FFFTPはfreewareです",-1,7,220,305,8
     CTEXT           "Copyright(C) 1997-2010 Sota & ご協力いただいた方々",-1,7,25,305,8,SS_NOPREFIX
-    CTEXT           "Copyright (C) 2011-2018 FFFTP Project (Hiromichi Matsushima, Suguru Kawamoto, IWAMOTO Kouichi, vitamin0x, うなー, Asami, fortran90, tomo1192, Yuji Tanaka, Moriguchi Hirokazu, ふうせん, potato)\nCopyright (C) 2018-2020, 倉田佐祐理",-1,7,37,305,32,SS_NOPREFIX
+    CTEXT           "Copyright (C) 2011-2018 FFFTP Project (Hiromichi Matsushima, Suguru Kawamoto, IWAMOTO Kouichi, vitamin0x, うなー, Asami, fortran90, tomo1192, Yuji Tanaka, Moriguchi Hirokazu, ふうせん, potato)\nCopyright (C) 2018-2021, 倉田佐祐理",-1,7,37,305,32,SS_NOPREFIX
     EDITTEXT        ABOUT_URL,7,76,305,12,ES_CENTER | ES_AUTOHSCROLL | ES_READONLY | NOT WS_BORDER
     CTEXT           "OLE D&&D機能 by 平田豊さん、nakkaさん\nホスト内でのファイル移動機能 by 平田豊さん\nいくつかの機能 by miauさん\nマスターパスワード機能 by げんげんさん\nAES暗号化 by Mocaさん\n\n他、多くの方のご協力をいただきました。",-1,7,143,305,60
 END
@@ -518,6 +518,7 @@ BEGIN
     CONTROL         "設定をレジストリでなくINIファイルに保存する (&I)",MISC_REGTYPE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,7,95,173,10
     CONTROL         "マスターパスワードで全設定を暗号化する (&E)",MISC_ENCRYPT_SETTINGS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,7,111,173,10
     CONTROL         "デバッグ",MISC_DEBUG,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,164,127,40,10
+    PUSHBUTTON      "サウンドを開く",IDC_OPENSOUNDS,7,26,67,14
 END
 
 hostname_dlg DIALOGEX 0, 0, 187, 93
@@ -721,25 +722,6 @@ BEGIN
     CONTROL         "正規表現(&R)",INP_ANONYMOUS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,7,24,121,10
     DEFPUSHBUTTON   "OK",IDOK,36,38,50,14
     PUSHBUTTON      "キャンセル",IDCANCEL,101,38,50,14
-END
-
-opt_sound_dlg DIALOGEX 0, 0, 211, 155
-STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
-CAPTION "サウンド"
-FONT 9, DIALOGFONT, 0, 0, 0x1
-BEGIN
-    CONTROL         "接続時にWaveファイルを鳴らす(&C)",SOUND_CONNECT,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,7,9,196,10
-    EDITTEXT        SOUND_CONNECT_WAV,31,22,116,12,ES_AUTOHSCROLL
-    PUSHBUTTON      "...",SOUND_CONNECT_BR,148,21,13,13
-    PUSHBUTTON      "テスト",SOUND_CONNECT_TEST,166,21,37,13
-    CONTROL         "転送終了時にWaveファイルを鳴らす(&T)",SOUND_TRANS,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,7,42,196,10
-    EDITTEXT        SOUND_TRANS_WAV,31,55,116,12,ES_AUTOHSCROLL
-    PUSHBUTTON      "...",SOUND_TRANS_BR,148,55,13,13
-    PUSHBUTTON      "テスト",SOUND_TRANS_TEST,166,55,37,13
-    CONTROL         "エラーの時Waveファイルを鳴らす(&E)",SOUND_ERROR,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,7,75,196,10
-    EDITTEXT        SOUND_ERROR_WAV,31,88,116,12,ES_AUTOHSCROLL
-    PUSHBUTTON      "...",SOUND_ERROR_BR,148,88,13,13
-    PUSHBUTTON      "テスト",SOUND_ERROR_TEST,166,88,37,13
 END
 
 downerr_dlg DIALOGEX 0, 0, 223, 103
@@ -1718,14 +1700,6 @@ BEGIN
         BOTTOMMARGIN, 52
     END
 
-    opt_sound_dlg, DIALOG
-    BEGIN
-        LEFTMARGIN, 7
-        RIGHTMARGIN, 204
-        TOPMARGIN, 7
-        BOTTOMMARGIN, 148
-    END
-
     downerr_dlg, DIALOG
     BEGIN
         LEFTMARGIN, 7
@@ -2171,26 +2145,12 @@ END
 
 /////////////////////////////////////////////////////////////////////////////
 //
-// Cursor
-//
-
-resize_lr_csr           CURSOR                  "cursor1.cur"
-
-resize_ud_csr           CURSOR                  "cursor2.cur"
-
-drag_csr                CURSOR                  "drag_csr.cur"
-
-nodrop_csr              CURSOR                  "nodrop_c.cur"
-
-
-/////////////////////////////////////////////////////////////////////////////
-//
 // Version
 //
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 4,7,0,0
- PRODUCTVERSION 4,7,0,0
+ FILEVERSION 5,1,0,0
+ PRODUCTVERSION 5,1,0,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -2208,12 +2168,12 @@ BEGIN
             VALUE "Comments", "これはフリーソフトウエアです。"
             VALUE "CompanyName", "Sota, FFFTP Project"
             VALUE "FileDescription", "FFFTP"
-            VALUE "FileVersion", "4.7.0.0"
+            VALUE "FileVersion", "5.1.0.0"
             VALUE "InternalName", "FFFTP"
-            VALUE "LegalCopyright", "Copyright (C) 1997-2010 Sota & ご協力いただいた方々\nCopyright (C) 2011-2018 FFFTP Project (Hiromichi Matsushima, Suguru Kawamoto, IWAMOTO Kouichi, vitamin0x, うなー, Asami, fortran90, tomo1192, Yuji Tanaka, Moriguchi Hirokazu, ふうせん, potato).\r\nCopyright (C) 2018-2020, 倉田佐祐理."
+            VALUE "LegalCopyright", "Copyright (C) 1997-2010 Sota & ご協力いただいた方々\nCopyright (C) 2011-2018 FFFTP Project (Hiromichi Matsushima, Suguru Kawamoto, IWAMOTO Kouichi, vitamin0x, うなー, Asami, fortran90, tomo1192, Yuji Tanaka, Moriguchi Hirokazu, ふうせん, potato).\r\nCopyright (C) 2018-2021, 倉田佐祐理."
             VALUE "OriginalFilename", "FFFTP.exe"
             VALUE "ProductName", "FFFTP"
-            VALUE "ProductVersion", "4.7.0.0"
+            VALUE "ProductVersion", "5.1.0.0"
         END
     END
     BLOCK "VarFileInfo"
@@ -2334,7 +2294,7 @@ BEGIN
     IDS_MSGJPN019           "ホスト %s が見つかりません."
     IDS_MSGJPN021           "SOCKSサーバー %s が見つかりません."
     IDS_MSGJPN022           "SOCKSサーバー %s に接続しています."
-    IDS_MSGJPN023           "SOCKSサーバーに接続できません. (Err=%d)"
+    IDS_MSGJPN023           "SOCKSサーバーに接続できません."
     IDS_MSGJPN025           "接続しました."
     IDS_MSGJPN026           "接続できません."
     IDS_MSGJPN027           "ソケットが作成できません."
@@ -2369,9 +2329,6 @@ BEGIN
     IDS_MSGJPN052           "削除: %s"
     IDS_MSGJPN053           "作成: %s"
     IDS_MSGJPN054           "転送: %s"
-    IDS_MSGJPN055           "削除: %s"
-    IDS_MSGJPN056           "作成: %s"
-    IDS_MSGJPN057           "転送: %s"
     IDS_MSGJPN058           "%d個のファイルを転送します."
     IDS_MSGJPN059           "転送するファイルはありません."
     IDS_MSGJPN060           "%d個のフォルダを作成します."
@@ -2390,23 +2347,18 @@ BEGIN
     IDS_MSGJPN069           "名前変更（ホスト）"
     IDS_MSGJPN070           "フォルダ作成（ローカル）"
     IDS_MSGJPN071           "フォルダ作成（ホスト）"
-    IDS_MSGJPN072           "フォルダ変更（ローカル）"
     IDS_MSGJPN073           "フォルダ変更（ホスト）"
     IDS_MSGJPN074           "ローカル側のファイル容量を計算します."
     IDS_MSGJPN075           "ホスト側のファイル容量を計算します."
     IDS_MSGJPN076           "ローカル側のファイル容量"
     IDS_MSGJPN077           "ホスト側のファイル容量"
     IDS_MSGJPN078           "フォルダ作成"
-    IDS_MSGJPN079           "フォルダ作成"
 END
 
 STRINGTABLE
 BEGIN
     IDS_MSGJPN080           "フォルダ削除"
     IDS_MSGJPN081           "ファイル削除"
-    IDS_MSGJPN082           "フォルダ作成"
-    IDS_MSGJPN083           "フォルダ削除"
-    IDS_MSGJPN084           "ファイル削除"
     IDS_MSGJPN085           "%sという名前のファイルはダウンロードできません."
     IDS_MSGJPN086           "ダウンロード"
     IDS_MSGJPN087           "ファイル一覧取得"
@@ -2458,7 +2410,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_MSGJPN133           "GMT%+02d:00 (日本)"
+    IDS_MSGJPN133           "GMT+09:00 (日本)"
     IDS_MSGJPN134           "使用しない"
     IDS_MSGJPN135           "自動認識"
     IDS_MSGJPN136           "OTP MD4, S/KEY"
@@ -2476,9 +2428,7 @@ BEGIN
     IDS_MSGJPN144           "Stratus"
     IDS_MSGJPN145           "フォルダを変更できません."
     IDS_MSGJPN146           "フォルダを作成できません."
-    IDS_MSGJPN147           "フォルダを削除できません."
     IDS_MSGJPN148           "フォルダを削除できません."
-    IDS_MSGJPN149           "ファイルを削除できません."
     IDS_MSGJPN150           "ファイルを削除できません."
     IDS_MSGJPN151           "ファイル名変更ができません."
     IDS_MSGJPN154           "接続"
@@ -2525,8 +2475,6 @@ BEGIN
     IDS_MSGJPN199           "ファイル名"
     IDS_MSGJPN200           "ファイル名"
     IDS_MSGJPN201           "属性"
-    IDS_MSGJPN202           "ファイル名"
-    IDS_MSGJPN203           "ファイル名"
     IDS_MSGJPN204           "FWユーザー名→ FWパスワード→ SITE ホスト名"
     IDS_MSGJPN205           "FWユーザー名→ FWパスワード→ USER ユーザー名@ホスト名"
     IDS_MSGJPN206           "FWユーザー名→ FWパスワード"
@@ -2566,18 +2514,16 @@ BEGIN
     IDS_MSGJPN249           "転送待ちファイル%d個"
     IDS_MSGJPN250           "受信中 %s"
     IDS_MSGJPN251           "Err: シード文字列"
-    IDS_MSGJPN252           "Err: シード文字列"
     IDS_MSGJPN253           "Err: シーケンス番号"
 END
 
 STRINGTABLE
 BEGIN
-    IDS_MSGJPN278           "理由: %s"
     IDS_MSGJPN279           "Listenソケットが取得できません"
     IDS_MSGJPN280           "Dataソケットが取得できません"
     IDS_MSGJPN281           "PASVモードで接続できません"
     IDS_MSGJPN282           "INIファイル名が指定されていません"
-    IDS_MSGJPN283           "INIファイル指定: "
+    IDS_MSGJPN283           "INIファイル指定: %s"
 END
 
 STRINGTABLE
@@ -2605,15 +2551,10 @@ BEGIN
     IDS_MSGJPN314           "通信は暗号化されていません.\r\n第三者にパスワードおよび内容を傍受される可能性があります."
     IDS_MSGJPN315           "FTP over Explicit SSL/TLS (FTPES)を使用します."
     IDS_MSGJPN316           "FTP over Implicit SSL/TLS (FTPIS)を使用します."
-    IDS_MSGJPN317           "SSH FTP (SFTP)を使用します."
 END
 
 STRINGTABLE
 BEGIN
-    IDS_MSGJPN321           "プロセスの保護に必要な関数を取得できませんでした."
-    IDS_MSGJPN322           "デバッガが検出されました."
-    IDS_MSGJPN323           "信頼できないDLLをアンロードできませんでした."
-    IDS_MSGJPN324           "プロセスの保護に必要な関数をフックできませんでした."
     IDS_MSGJPN329           "UTF-8 BOM"
     IDS_MSGJPN330           "ホストの漢字コードはUTF-8 BOM"
     IDS_MSGJPN331           "ローカルの漢字コードはUTF-8 BOM"
@@ -2629,25 +2570,17 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_MSGJPN358           "ソフトウェアの更新が完了しました.\n以前のバージョンのバックアップコピーは以下の場所にあります.\n%s"
-    IDS_MSGJPN359           "この機能で新規作成したINIファイルをWinSCPで読み込むと全ての設定が失われます.\nすでにWinSCPをお使いでありホストの設定のみ移行したい場合は既存のWinSCP.iniを選択してください."
-END
-
-STRINGTABLE
-BEGIN
     IDS_MSGJPN2000          "NonStop Server"
 END
 
 STRINGTABLE
 BEGIN
     IDS_APP                 "FFFTP"
-    IDS_ERR_CRYPTO          "暗号ライブラリの初期化に失敗しました.\nアプリケーションを終了します."
     IDS_ERR_SSL             "SSLの初期化に失敗しました.\nアプリケーションを終了します."
     IDS_SECURE              "保護されています"
     IDS_NOTSECURE           "保護されていません"
     IDS_FILETYPE_ALL        "すべてのファイル\t*.*\t"
     IDS_FILETYPE_EXECUTABLE "実行可能ファイル (*.exe;*.com;*.bat)\t*.exe;*.com;*.bat\t"
-    IDS_FILETYPE_AUDIO      "オーディオ ファイル (*.wav)\t*.wav\t"
 END
 
 STRINGTABLE
@@ -2657,7 +2590,6 @@ BEGIN
     IDS_FILETYPE_XML        "XML ファイル (*.xml)\t*.xml\t"
     IDS_OPEN_WSFTPINI       "WS_FTP.INIを開く"
     IDS_SELECT_VIEWER       "ビューアーを選択する"
-    IDS_SELECT_AUDIOFILE    "オーディオファイルを選択する"
     IDS_SAVE_SETTING        "設定を保存する"
     IDS_LOAD_SETTING        "設定を読み込む"
     IDS_OPTION              "オプション"
@@ -2686,6 +2618,13 @@ BEGIN
     IDS_INVALID_PATH        "%s は不正なファイル名です.\r\nこのファイルはダウンロードされません."
     IDS_FINISHED            "完了"
     IDS_CANCELLED           "中止"
+END
+
+STRINGTABLE
+BEGIN
+    IDS_SOUNDCONNECTED      "接続時"
+    IDS_SOUNDTRANSFERRED    "転送完了時"
+    IDS_SOUNDERROR          "エラー時"
 END
 
 #endif    // Japanese (Japan) resources

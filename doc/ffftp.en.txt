@@ -1,9 +1,9 @@
 ============================================================
-[Software Name]  FFFTP Ver.4.7 (FTP Client software)
+[Software Name]  FFFTP Ver.5.1 (FTP Client software)
 [Copyright]      Copyright(C) 1997-2010 Sota & cooperators
                  Copyright (C) 2011-2018 FFFTP Project (Hiromichi Matsushima, Suguru Kawamoto, IWAMOTO Kouichi, vitamin0x, unarist, Asami, fortran90, tomo1192, Yuji Tanaka, Moriguchi Hirokazu, Fu-sen, potato).
-				 Copyright (C) 2018-2020, Kurata Sayuri.
-[Environment]    Windows 10, 8.1, 8, 7, Vista, XP
+				 Copyright (C) 2018-2021, Kurata Sayuri.
+[Environment]    Windows 10, 8.1, 8, 7, Vista
 ============================================================
 
 About INI File
@@ -29,10 +29,12 @@ following menu.
 File -> Settings -> Change Master password
 
 
-Changes at 4.7
+Changes at 5.1
 --------------
 
-- Fix crash when host setting modified. #193
+- Fix bug of cannot open non-ascii folder. #270
+- Fix bug of settings string have training nul. #268
+- Title bar use unicode for performance. #269
 
 
 Outline
@@ -45,9 +47,8 @@ Environment
 - x64 edtion
   Windows 8.1 or later
 - x86 edtion
-  Windows XP SP3 or later
-  To use IDN; Internationalized Domain Name, you need to install Internet
-  Explorer 7 or later.
+  Windows Vista or later
+
 
 Files
 -----
@@ -76,7 +77,7 @@ License Agreement
 -----------------
 Copyright(C) 1997-2010, Sota & cooperators. All rights reserved.
 Copyright (C) 2011-2018 FFFTP Project (Hiromichi Matsushima, Suguru Kawamoto, IWAMOTO Kouichi, vitamin0x, unarist, Asami, fortran90, tomo1192, Yuji Tanaka, Moriguchi Hirokazu, Fu-sen, potato).
-Copyright (C) 2018-2020, Kurata Sayuri.
+Copyright (C) 2018-2021, Kurata Sayuri.
 
 Redistribution and use in source and binary forms, with or without 
 modification, are permitted provided that the following conditions 

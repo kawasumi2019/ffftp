@@ -30,533 +30,105 @@
 #include "common.h"
 
 
-/*----- 文字列の最後に "\" を付ける -------------------------------------------
-*
-*	Parameter
-*		char *Str : 文字列
-*
-*	Return Value
-*		なし
-*
-*	Note
-*		オリジナルの文字列 char *Str が変更されます。
-*----------------------------------------------------------------------------*/
-
-void SetYenTail(char* Str) {
-	if (Str[strlen(Str) - 1] != '\\')
-		strcat(Str, "\\");
-}
-
-
-/*----- 文字列の最後に "/" を付ける -------------------------------------------
-*
-*	Parameter
-*		char *Str : 文字列
-*
-*	Return Value
-*		なし
-*
-*	Note
-*		オリジナルの文字列 char *Str が変更されます。
-*----------------------------------------------------------------------------*/
-
-void SetSlashTail(char* Str) {
+// 文字列の最後に "/" を付ける
+//   Tandem では / の代わりに . を追加
+std::wstring SetSlashTail(std::wstring&& path) {
+	wchar_t separator = L'/';
 #if defined(HAVE_TANDEM)
-	/* Tandem では / の代わりに . を追加 */
-	if (AskHostType() == HTYPE_TANDEM) {
-		if (Str[strlen(Str) - 1] != '.')
-			strcat(Str, ".");
-	} else
+	if (AskHostType() == HTYPE_TANDEM)
+		separator = L'.';
 #endif
-		if (Str[strlen(Str) - 1] != '/')
-			strcat(Str, "/");
+	if (!path.ends_with(separator))
+		path += separator;
+	return path;
 }
 
 
-/*----- 文字列内の特定の文字を全て置き換える ----------------------------------
-*
-*	Parameter
-*		char *Str : 文字列
-*		char Src : 検索文字
-*		char Dst : 置換文字
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-void ReplaceAll(char* Str, char Src, char Dst) {
+// 文字列内の特定の文字を全て置き換える
+//   Tandem ではノード名の変換を行わないため、最初の1文字が \ でもそのままにする
+//   置換対象fromが \ 以外ならstd::replaceでよい
+std::wstring ReplaceAll(std::wstring&& str, wchar_t from, wchar_t to) {
+	if (!empty(str)) {
+		auto it = begin(str);
 #if defined(HAVE_TANDEM)
-	/* Tandem ではノード名の変換を行わない */
-	/* 最初の1文字が \ でもそのままにする */
-	if (AskRealHostType() == HTYPE_TANDEM && strlen(Str) > 0)
-		Str++;
+		if (AskRealHostType() == HTYPE_TANDEM)
+			++it;
 #endif
-	for (char* Pos; (Pos = strchr(Str, Src)) != NULL;)
-		*Pos = Dst;
+		std::replace(it, end(str), from, to);
+	}
+	return str;
 }
 
 
-/*----- 数字もしくは特定の１文字かチェック ------------------------------------
-*
-*	Parameter
-*		int Ch : チェックする文字
-*		int Sym : 記号
-*
-*	Return Value
-*		int ステータス
-*			0=数字でも特定の記号でもない
-*----------------------------------------------------------------------------*/
-
-int IsDigitSym(int Ch, int Sym)
-{
-	int Ret;
-
-	if((Ret = IsDigit(Ch)) == 0)
-	{
-		if((Sym != NUL) && (Sym == Ch))
-			Ret = 1;
-	}
-	return(Ret);
-}
-
-
-/*----- 文字列が全て同じ文字かチェック ----------------------------------------
-*
-*	Parameter
-*		char *Str : 文字列
-*		int Ch : 文字
-*
-*	Return Value
-*		int ステータス
-*			YES/NO
-*----------------------------------------------------------------------------*/
-
-int StrAllSameChar(const char* Str, char Ch)
-{
-	int Ret;
-
-	Ret = YES;
-	while(*Str != NUL)
-	{
-		if(*Str != Ch)
-		{
-			Ret = NO;
-			break;
-		}
-		Str++;
-	}
-	return(Ret);
-}
-
-
-/*----- 文字列の末尾のスペースを削除 ------------------------------------------
-*
-*	Parameter
-*		char *Str : 文字列
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-void RemoveTailingSpaces(char *Str)
-{
-	char *Pos;
-
-	Pos = Str + strlen(Str);
-	while(--Pos > Str)
-	{
-		if(*Pos != ' ')
-			break;
-		*Pos = NUL;
-	}
-	return;
-}
-
-
-/*----- 大文字／小文字を区別しないstrstr --------------------------------------
-*
-*	Parameter
-*		char *s1 : 文字列１
-*		char *s2 : 文字列２
-*
-*	Return Value
-*		char *文字列１中で文字列２が見つかった位置
-*			NULL=見つからなかった
-*----------------------------------------------------------------------------*/
-
-const char* stristr(const char* s1, const char* s2)
-{
-	const char* Ret;
-
-	Ret = NULL;
-	while(*s1 != NUL)
-	{
-		if((tolower(*s1) == tolower(*s2)) &&
-		   (_strnicmp(s1, s2, strlen(s2)) == 0))
-		{
-			Ret = s1;
-			break;
-		}
-		s1++;
-	}
-	return(Ret);
-}
-
-
-/*----- 文字列中のスペースで区切られた次のフィールドを返す --------------------
-*
-*	Parameter
-*		char *Str : 文字列
-*
-*	Return Value
-*		char *次のフィールド
-*			NULL=見つからなかった
-*----------------------------------------------------------------------------*/
-
-const char* GetNextField(const char* Str)
-{
-	if((Str = strchr(Str, ' ')) != NULL)
-	{
-		while(*Str == ' ')
-		{
-			if(*Str == NUL)
-			{
-				Str = NULL;
-				break;
-			}
-			Str++;
-		}
-	}
-	return(Str);
-}
-
-
-/*----- 現在のフィールドの文字列をコピーする ----------------------------------
-*
-*	Parameter
-*		char *Str : 文字列
-*		char *Buf : コピー先
-*		int Max : 最大文字数
-*
-*	Return Value
-*		int ステータス
-*			FFFTP_SUCCESS/FFFTP_FAIL=長さが長すぎる
-*----------------------------------------------------------------------------*/
-
-int GetOneField(const char* Str, char *Buf, int Max)
-{
-	int Sts;
-	const char* Pos;
-
-	Sts = FFFTP_FAIL;
-	if((Pos = strchr(Str, ' ')) == NULL)
-	{
-		if((int)strlen(Str) <= Max)
-		{
-			strcpy(Buf, Str);
-			Sts = FFFTP_SUCCESS;
-		}
-	}
-	else
-	{
-		if(Pos - Str <= Max)
-		{
-			strncpy(Buf, Str, Pos - Str);
-			*(Buf + (Pos - Str)) = NUL;
-			Sts = FFFTP_SUCCESS;
-		}
-	}
-	return(Sts);
-}
-
-
-/*----- カンマを取り除く ------------------------------------------------------
-*
-*	Parameter
-*		char *Str : 文字列
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-void RemoveComma(char *Str)
-{
-	char *Put;
-
-	Put = Str;
-	while(*Str != NUL)
-	{
-		if(*Str != ',')
-		{
-			*Put = *Str;
-			Put++;
-		}
-		Str++;
-	}
-	*Put = NUL;
-	return;
-}
-
-
-/*----- パス名の中のファイル名の先頭を返す ------------------------------------
-*
-*	Parameter
-*		char *Path : パス名
-*
-*	Return Value
-*		char *ファイル名の先頭
-*
-*	Note
-*		ディレクトリの区切り記号は "\" と "/" の両方が有効
-*----------------------------------------------------------------------------*/
-
-const char* GetFileName(const char* Path)
-{
-	const char* Pos;
-
-	if((Pos = strchr(Path, ':')) != NULL)
-		Path = Pos + 1;
-
-	if((Pos = strrchr(Path, '\\')) != NULL)
-		Path = Pos + 1;
-
-	if((Pos = strrchr(Path, '/')) != NULL)
-		Path = Pos + 1;
-
+// パス名の中のファイル名の先頭を返す
+//   ディレクトリの区切り記号は "\" と "/" の両方が有効
+//   Tandem は . がデリミッタとなる
+std::wstring_view GetFileName(std::wstring_view path) {
+	if (auto pos = path.find_first_of(L':'); pos != std::wstring_view::npos)
+		path = path.substr(pos + 1);
+	auto delimiter = L"\\/"sv;
 #if defined(HAVE_TANDEM)
-	/* Tandem は . がデリミッタとなる */
-	if((AskHostType() == HTYPE_TANDEM) && ((Pos = strrchr(Path, '.')) != NULL))
-		Path = Pos + 1;
+	if (AskHostType() == HTYPE_TANDEM)
+		delimiter = L"\\/."sv;
 #endif
-	return(Path);
+	if (auto pos = path.find_last_of(delimiter); pos != std::wstring_view::npos)
+		path = path.substr(pos + 1);
+	return path;
 }
 
 
-/*----- パス名の中の拡張子の先頭を返す ----------------------------------------
-*
-*	Parameter
-*		char *Path : パス名
-*
-*	Return Value
-*		char *拡張子の先頭
-*----------------------------------------------------------------------------*/
-
-const char* GetFileExt(const char* Path)
-{
-	const char* Ret;
-
-	Ret = Path + strlen(Path);
-	if((strcmp(Path, ".") != 0) &&
-	   (strcmp(Path, "..") != 0))
-	{
-		while((Path = strchr(Path, '.')) != NULL)
-		{
-			Path++;
-			Ret = Path;
-		}
-	}
-	return(Ret);
-}
-
-
-/*----- パス名からファイル名を取り除く ----------------------------------------
-*
-*	Parameter
-*		char *Path : パス名
-*		char *Buf : ファイル名を除いたパス名のコピー先
-*
-*	Return Value
-*		なし
-*
-*	Note
-*		ディレクトリの区切り記号は "\" と "/" の両方が有効
-*----------------------------------------------------------------------------*/
-
-void RemoveFileName(const char* Path, char *Buf)
-{
-	char *Pos;
-
-	strcpy(Buf, Path);
-
-	if((Pos = strrchr(Buf, '/')) != NULL)
-		*Pos = NUL;
-	else if((Pos = strrchr(Buf, '\\')) != NULL)
-	{
-		if((Pos == Buf) || 
-		   ((Pos != Buf) && (*(Pos - 1) != ':')))
-			*Pos = NUL;
-	}
-	return;
-}
-
-
-/*----- 上位ディレクトリのパス名を取得 ----------------------------------------
-*
-*	Parameter
-*		char *Path : パス名
-*
-*	Return Value
-*		なし
-*
-*	Note
-*		ディレクトリの区切り記号は "\" と "/" の両方が有効
-*		最初の "\"や"/"は残す
-*			例） "/pub"   --> "/"
-*			例） "C:\DOS" --> "C:\"
-*----------------------------------------------------------------------------*/
-
-void GetUpperDir(char *Path)
-{
-	char *Top;
-	char *Pos;
-
-	if(((Top = strchr(Path, '/')) != NULL) ||
-	   ((Top = strchr(Path, '\\')) != NULL))
-	{
-		Top++;
-		if(((Pos = strrchr(Top, '/')) != NULL) ||
-		   ((Pos = strrchr(Top, '\\')) != NULL))
-			*Pos = NUL;
-		else
-			*Top = NUL;
-	}
-	return;
-}
-
-
-/*----- 上位ディレクトリのパス名を取得 ----------------------------------------
-*
-*	Parameter
-*		char *Path : パス名
-*
-*	Return Value
-*		なし
-*
-*	Note
-*		ディレクトリの区切り記号は "\" と "/" の両方が有効
-*		最初の "\"や"/"も消す
-*			例） "/pub"   --> ""
-*			例） "C:\DOS" --> "C:"
-*----------------------------------------------------------------------------*/
-
-void GetUpperDirEraseTopSlash(char *Path)
-{
-	char *Pos;
-
-	if(((Pos = strrchr(Path, '/')) != NULL) ||
-	   ((Pos = strrchr(Path, '\\')) != NULL))
-		*Pos = NUL;
-	else
-		*Path = NUL;
-
-	return;
-}
-
-
-/*----- ディレクトリの階層数を返す --------------------------------------------
-*
-*	Parameter
-*		char *Path : パス名
-*
-*	Return Value
-*		なし
-*
-*	Note
-*		単に '\' と '/'の数を返すだけ
-*----------------------------------------------------------------------------*/
-
-int AskDirLevel(const char* Path)
-{
-	const char* Pos;
-	int Level;
-
-	Level = 0;
-	while(((Pos = strchr(Path, '/')) != NULL) ||
-		  ((Pos = strchr(Path, '\\')) != NULL))
-	{
-		Path = Pos + 1;
-		Level++;
-	}
-	return(Level);
+// パス名からファイル名を取り除く
+//   ディレクトリの区切り記号は "\" と "/" の両方が有効
+static std::string_view RemoveFileName(std::string_view path) {
+	if (auto const p = path.rfind('/'); p != std::string_view::npos)
+		return path.substr(0, p);
+	if (auto const p = path.rfind('\\'); p != std::string_view::npos)
+		if (p == 0 || path[p - 1] != ':')
+			return path.substr(0, p);
+	return path;
 }
 
 
 // ファイルサイズを文字列に変換する
-void MakeSizeString(double Size, char *Buf) {
-	if (Size < 1024)
-		sprintf(Buf, "%.0lfB", Size);
-	else if (Size /= 1024; Size < 1024)
-		sprintf(Buf, "%.2lfKB", Size);
-	else if (Size /= 1024; Size < 1024)
-		sprintf(Buf, "%.2lfMB", Size);
-	else if (Size /= 1024; Size < 1024)
-		sprintf(Buf, "%.2lfGB", Size);
-	else if (Size /= 1024; Size < 1024)
-		sprintf(Buf, "%.2lfTB", Size);
-	else
-		sprintf(Buf, "%.2lfPB", Size / 1024);
+std::wstring MakeSizeString(double size) {
+	if (size < 1024)
+		return strprintf(L"%.0lfB", size);
+	size /= 1024;
+	if (size < 1024)
+		return strprintf(L"%.2lfKB", size);
+	size /= 1024;
+	if (size < 1024)
+		return strprintf(L"%.2lfMB", size);
+	size /= 1024;
+	if (size < 1024)
+		return strprintf(L"%.2lfGB", size);
+	size /= 1024;
+	if (size < 1024)
+		return strprintf(L"%.2lfTB", size);
+	size /= 1024;
+	return strprintf(L"%.2lfPB", size);
 }
 
 
 // StaticTextの領域に収まるようにパス名を整形して表示
-void DispStaticText(HWND hWnd, const char* Str) {
+void DispStaticText(HWND hWnd, std::wstring text) {
 	RECT rect;
 	GetClientRect(hWnd, &rect);
 	auto font = (HFONT)SendMessageW(hWnd, WM_GETFONT, 0, 0);
-
 	auto dc = GetDC(hWnd);
 	auto previous = SelectObject(dc, font);
-	auto wstr = u8(Str);
-	std::wstring_view view = wstr;
 	for (;;) {
-		if (size(view) <= 4)
+		if (size(text) <= 4)
 			break;
-		SIZE size;
-		GetTextExtentPoint32W(dc, data(view), size_as<int>(view), &size);
-		if (size.cx <= rect.right)
+		if (SIZE size; GetTextExtentPoint32W(dc, data(text), size_as<int>(text), &size) && size.cx <= rect.right)
 			break;
-		if (auto pos = view.find(L'\\', 4); pos != std::wstring_view::npos)
-			view.remove_prefix(pos - 3);
-		else if (pos = view.find(L'/', 4); pos != std::wstring_view::npos)
-			view.remove_prefix(pos - 3);
-		else
-			view.remove_prefix(1);
-		std::fill_n(const_cast<wchar_t*>(data(view)), 3, L'.');		// viewはwstrを指しているため書き換え可能
+		auto const pos = text.find_first_of(L"\\/"sv, 4);
+		text.erase(0, pos != std::wstring::npos ? pos - 3 : 1);
+		std::fill_n(begin(text), 3, L'.');
 	}
 	SelectObject(dc, previous);
 	ReleaseDC(hWnd, dc);
-	SetText(hWnd, data(view));
-}
-
-
-/*----- 文字列アレイの長さを求める --------------------------------------------
-*
-*	Parameter
-*		char *Str : 文字列アレイ (末尾はNUL２つ)
-*
-*	Return Value
-*		int 長さ
-*
-*	Note
-*		終端の2つのNULのうちの最後の物は数えない
-*			StrMultiLen("") = 0
-*			StrMultiLen("abc\0xyz\0") = 8
-*			StrMultiLen("abc") = 終端が２つのNULでないので求められない
-*----------------------------------------------------------------------------*/
-
-int StrMultiLen(const char *Str)
-{
-	int Len;
-	int Tmp;
-
-	Len = 0;
-	while(*Str != NUL)
-	{
-		Tmp = (int)strlen(Str) + 1;
-		Str += Tmp;
-		Len += Tmp;
-	}
-	return(Len);
+	SetText(hWnd, text);
 }
 
 
@@ -589,386 +161,6 @@ void RectClientToScreen(HWND hWnd, RECT *Rect)
 	return;
 }
 
-
-/*----- ＵＮＣ文字列を分解する ------------------------------------------------
-*
-*	Parameter
-*		char *unc : UNC文字列
-*		char *Host : ホスト名をコピーするバッファ (サイズは HOST_ADRS_LEN+1)
-*		char *Path : パス名をコピーするバッファ (サイズは FMAX_PATH+1)
-*		char *File : ファイル名をコピーするバッファ (サイズは FMAX_PATH+1)
-*		char *User : ユーザ名をコピーするバッファ (サイズは USER_NAME_LEN+1)
-*		char *Pass : パスワードをコピーするバッファ (サイズは PASSWORD_LEN+1)
-*		int *Port : ポート番号をコピーするバッファ
-*
-*	Return Value
-*		int ステータス
-*			FFFTP_SUCCESS/FFFTP_FAIL
-*
-*	"\"は全て"/"に置き換える
-*----------------------------------------------------------------------------*/
-
-int SplitUNCpath(char *unc, char *Host, char *Path, char *File, char *User, char *Pass, int *Port)
-{
-	int Sts;
-	char *Pos1;
-	char *Pos2;
-	char Tmp[FMAX_PATH+1];
-
-	memset(Host, NUL, HOST_ADRS_LEN+1);
-	memset(Path, NUL, FMAX_PATH+1);
-	memset(File, NUL, FMAX_PATH+1);
-	memset(User, NUL, USER_NAME_LEN+1);
-	memset(Pass, NUL, PASSWORD_LEN+1);
-	*Port = IPPORT_FTP;
-
-	ReplaceAll(unc, '\\', '/');
-
-	if((Pos1 = strstr(unc, "//")) != NULL)
-		Pos1 += 2;
-	else
-		Pos1 = unc;
-
-	if((Pos2 = strchr(Pos1, '@')) != NULL)
-	{
-		memset(Tmp, NUL, FMAX_PATH+1);
-		memcpy(Tmp, Pos1, Pos2-Pos1);
-		Pos1 = Pos2 + 1;
-
-		if((Pos2 = strchr(Tmp, ':')) != NULL)
-		{
-			memcpy(User, Tmp, std::min(Pos2-Tmp, (ptrdiff_t)USER_NAME_LEN));
-			strncpy(Pass, Pos2+1, PASSWORD_LEN);
-		}
-		else
-			strncpy(User, Tmp, USER_NAME_LEN);
-	}
-
-	// IPv6対応
-	if((Pos2 = strchr(Pos1, '[')) != NULL && Pos2 < strchr(Pos1, ':'))
-	{
-		Pos1 = Pos2 + 1;
-		if((Pos2 = strchr(Pos2, ']')) != NULL)
-		{
-			memcpy(Host, Pos1, std::min(Pos2-Pos1, (ptrdiff_t)HOST_ADRS_LEN));
-			Pos1 = Pos2 + 1;
-		}
-	}
-
-	if((Pos2 = strchr(Pos1, ':')) != NULL)
-	{
-		if(strlen(Host) == 0)
-			memcpy(Host, Pos1, std::min(Pos2-Pos1, (ptrdiff_t)HOST_ADRS_LEN));
-		Pos2++;
-		if(IsDigit(*Pos2))
-		{
-			*Port = atoi(Pos2);
-			while(*Pos2 != NUL)
-			{
-				if(IsDigit(*Pos2) == 0)
-					break;
-				Pos2++;
-			}
-		}
-		RemoveFileName(Pos2, Path);
-		strncpy(File, GetFileName(Pos2), FMAX_PATH);
-	}
-	else if((Pos2 = strchr(Pos1, '/')) != NULL)
-	{
-		if(strlen(Host) == 0)
-			memcpy(Host, Pos1, std::min(Pos2-Pos1, (ptrdiff_t)HOST_ADRS_LEN));
-		RemoveFileName(Pos2, Path);
-		strncpy(File, GetFileName(Pos2), FMAX_PATH);
-	}
-	else
-	{
-		if (strlen(Host) == 0)
-			strncpy_s(Host, HOST_ADRS_LEN + 1, Pos1, HOST_ADRS_LEN);
-	}
-
-	Sts = FFFTP_FAIL;
-	if(strlen(Host) > 0)
-		Sts = FFFTP_SUCCESS;
-
-	return(Sts);
-}
-
-
-/*----- 日付文字列(JST)をFILETIME(UTC)に変換 ----------------------------------
-*
-*	Parameter
-*		char *Time : 日付文字列 ("yyyy/mm/dd hh:mm")
-*		FILETIME *Buf : ファイルタイムを返すワーク
-*
-*	Return Value
-*		int ステータス
-*			YES/NO=日付情報がなかった
-*----------------------------------------------------------------------------*/
-
-int TimeString2FileTime(const char *Time, FILETIME *Buf)
-{
-	SYSTEMTIME sTime;
-	FILETIME fTime;
-	int Ret;
-
-	Ret = NO;
-	Buf->dwLowDateTime = 0;
-	Buf->dwHighDateTime = 0;
-
-	if(strlen(Time) >= 16)
-	{
-		if(IsDigit(Time[0]) && IsDigit(Time[5]) && IsDigit(Time[8]) && 
-		   IsDigit(Time[12]) && IsDigit(Time[14]))
-		{
-			Ret = YES;
-		}
-
-		sTime.wYear = atoi(Time);
-		sTime.wMonth = atoi(Time + 5);
-		sTime.wDay = atoi(Time + 8);
-		if(Time[11] != ' ')
-			sTime.wHour = atoi(Time + 11);
-		else
-			sTime.wHour = atoi(Time + 12);
-		sTime.wMinute = atoi(Time + 14);
-		// タイムスタンプのバグ修正
-//		sTime.wSecond = 0;
-		if(strlen(Time) >= 19)
-			sTime.wSecond = atoi(Time + 17);
-		else
-			sTime.wSecond = 0;
-		sTime.wMilliseconds = 0;
-
-		SystemTimeToFileTime(&sTime, &fTime);
-		LocalFileTimeToFileTime(&fTime, Buf);
-	}
-	return(Ret);
-}
-
-
-/*----- FILETIME(UTC)を日付文字列(JST)に変換 ----------------------------------
-*
-*	Parameter
-*		FILETIME *Time : ファイルタイム
-*		char *Buf : 日付文字列を返すワーク
-*		int Mode : モード (DISPFORM_xxx)
-*		int InfoExist : 情報があるかどうか (FINFO_xxx)
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-void FileTime2TimeString(const FILETIME *Time, char *Buf, int Mode, int InfoExist, int ShowSeconds)
-{
-	SYSTEMTIME sTime;
-	FILETIME fTime;
-
-	if(Mode == DISPFORM_LEGACY)
-	{
-		if((Time->dwLowDateTime == 0) && (Time->dwHighDateTime == 0))
-			InfoExist = 0;
-
-		// タイムスタンプのバグ修正
-//		/* "yyyy/mm/dd hh:mm" */
-		/* "yyyy/mm/dd hh:mm:ss" */
-		FileTimeToLocalFileTime(Time, &fTime);
-		// タイムスタンプのバグ修正
-//		FileTimeToSystemTime(&fTime, &sTime);
-		if(!FileTimeToSystemTime(&fTime, &sTime))
-			InfoExist = 0;
-
-		// タイムスタンプのバグ修正
-//		if(InfoExist & FINFO_DATE)
-//			sprintf(Buf, "%04d/%02d/%02d ", sTime.wYear, sTime.wMonth, sTime.wDay);
-//		else
-//			sprintf(Buf, "           ");
-//
-//		if(InfoExist & FINFO_TIME)
-//			sprintf(Buf+11, "%2d:%02d", sTime.wHour, sTime.wMinute);
-//		else
-//			sprintf(Buf+11, "     ");
-		if(InfoExist & (FINFO_DATE | FINFO_TIME))
-		{
-			if(InfoExist & FINFO_DATE)
-				sprintf(Buf, "%04d/%02d/%02d ", sTime.wYear, sTime.wMonth, sTime.wDay);
-			else
-				sprintf(Buf, "           ");
-			if(ShowSeconds == YES)
-			{
-				if(InfoExist & FINFO_TIME)
-					sprintf(Buf+11, "%2d:%02d:%02d", sTime.wHour, sTime.wMinute, sTime.wSecond);
-				else
-					sprintf(Buf+11, "        ");
-			}
-			else
-			{
-				if(InfoExist & FINFO_TIME)
-					sprintf(Buf+11, "%2d:%02d", sTime.wHour, sTime.wMinute);
-				else
-					sprintf(Buf+11, "     ");
-			}
-		}
-		else
-			Buf[0] = NUL;
-	}
-	else
-	{
-//		if (!strftime((char *)str, 100, "%c",  (const struct tm *)thetime))
-//			SetTaskMsg("strftime が失敗しました!\n");
-	}
-	return;
-}
-
-
-/*----- ファイルタイムを指定タイムゾーンのローカルタイムからGMTに変換 ---------
-*
-*	Parameter
-*		FILETIME *Time : ファイルタイム
-*		int TimeZone : タイムゾーン
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-void SpecificLocalFileTime2FileTime(FILETIME *Time, int TimeZone)
-{
-	unsigned __int64 Tmp64;
-
-	Tmp64 = (unsigned __int64)Time->dwLowDateTime +
-			((unsigned __int64)Time->dwHighDateTime << 32);
-
-	Tmp64 -= (__int64)TimeZone * (__int64)36000000000;
-
-	Time->dwHighDateTime = (DWORD)(Tmp64 >> 32);
-	Time->dwLowDateTime = (DWORD)(Tmp64 & 0xFFFFFFFF);
-
-	return;
-}
-
-
-/*----- 属性文字列を値に変換 --------------------------------------------------
-*
-*	Parameter
-*		char *Str : 属性文字列 ("rwxrwxrwx")
-*
-*	Return Value
-*		int 値
-*----------------------------------------------------------------------------*/
-
-int AttrString2Value(const char* Str) {
-	int num = 0;
-	if (strlen(Str) >= 9) {
-		for (auto bit : { 0x400, 0x200, 0x100, 0x40, 0x20, 0x10, 0x4, 0x2, 0x1 })
-			if (*Str++ != '-')
-				num |= bit;
-	} else if (strlen(Str) >= 3)
-		std::from_chars(Str, Str + 3, num, 16);
-	return num;
-}
-
-
-/*----- 属性の値を文字列に変換 ------------------------------------------------
-*
-*	Parameter
-*		int Attr : 属性の値
-*		char *Buf : 属性文字列をセットするバッファ ("rwxrwxrwx")
-*
-*	Return Value
-*		int 値
-*----------------------------------------------------------------------------*/
-
-// ファイルの属性を数字で表示
-//void AttrValue2String(int Attr, char *Buf)
-void AttrValue2String(int Attr, char *Buf, int ShowNumber)
-{
-	// ファイルの属性を数字で表示
-//	strcpy(Buf, "---------");
-//
-//	if(Attr & 0x400)
-//		Buf[0] = 'r';
-//	if(Attr & 0x200)
-//		Buf[1] = 'w';
-//	if(Attr & 0x100)
-//		Buf[2] = 'x';
-//
-//	if(Attr & 0x40)
-//		Buf[3] = 'r';
-//	if(Attr & 0x20)
-//		Buf[4] = 'w';
-//	if(Attr & 0x10)
-//		Buf[5] = 'x';
-//
-//	if(Attr & 0x4)
-//		Buf[6] = 'r';
-//	if(Attr & 0x2)
-//		Buf[7] = 'w';
-//	if(Attr & 0x1)
-//		Buf[8] = 'x';
-	if(ShowNumber == YES)
-	{
-		sprintf(Buf, "%03x", Attr);
-	}
-	else
-	{
-		strcpy(Buf, "---------");
-
-		if(Attr & 0x400)
-			Buf[0] = 'r';
-		if(Attr & 0x200)
-			Buf[1] = 'w';
-		if(Attr & 0x100)
-			Buf[2] = 'x';
-
-		if(Attr & 0x40)
-			Buf[3] = 'r';
-		if(Attr & 0x20)
-			Buf[4] = 'w';
-		if(Attr & 0x10)
-			Buf[5] = 'x';
-
-		if(Attr & 0x4)
-			Buf[6] = 'r';
-		if(Attr & 0x2)
-			Buf[7] = 'w';
-		if(Attr & 0x1)
-			Buf[8] = 'x';
-	}
-
-	return;
-}
-
-
-/*----- INIファイル文字列を整形 -----------------------------------------------
-*
-*	Parameter
-*		char *Str : 文字列
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-void FormatIniString(char *Str)
-{
-	char *Put;
-
-	Put = Str;
-	while(*Str != NUL)
-	{
-		if((*Str != ' ') && (*Str != '\t') && (*Str != '\n'))
-			*Put++ = *Str;
-		if(*Str++ == '=')
-			break;
-	}
-
-	while(*Str != NUL)
-	{
-		if((*Str != '\"') && (*Str != '\n'))
-			*Put++ = *Str;
-		Str++;
-	}
-	*Put = NUL;
-
-	return;
-}
 
 static auto GetFilterString(std::initializer_list<FileType> fileTypes) {
 	static auto const map = [] {
@@ -1003,78 +195,22 @@ fs::path SelectFile(bool open, HWND hWnd, UINT titleId, const wchar_t* initialFi
 }
 
 
-/*----- ディレクトリを選択 ----------------------------------------------------
-*
-*	Parameter
-*		HWND hWnd : ウインドウハンドル
-*		char *Buf : ディレクトリ名を返すバッファ（初期ディレクトリ名）
-*		int MaxLen : バッファのサイズ
-*
-*	Return Value
-*		int ステータス
-*			TRUE/FALSE=取消
-*----------------------------------------------------------------------------*/
-
-int SelectDir(HWND hWnd, char *Buf, size_t MaxLen) {
-	int result = FALSE;
+// ディレクトリを選択
+fs::path SelectDir(HWND hWnd) {
+	fs::path path;
 	auto const cwd = fs::current_path();
-	wchar_t buffer[FMAX_PATH + 1];
-	auto const title = u8(MSGJPN185);
-	BROWSEINFOW bi{ hWnd, nullptr, buffer, title.c_str(), BIF_RETURNONLYFSDIRS };
+	auto const title = GetString(IDS_MSGJPN185);
+	BROWSEINFOW bi{ hWnd, nullptr, nullptr, title.c_str(), BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE };
 	if (auto idlist = SHBrowseForFolderW(&bi)) {
-		SHGetPathFromIDListW(idlist, buffer);
-		strncpy(Buf, u8(buffer).c_str(), MaxLen - 1);
-		result = TRUE;
+		wchar_t buffer[FMAX_PATH + 1];
+		SHGetPathFromIDListEx(idlist, buffer, size_as<DWORD>(buffer), GPFIDL_DEFAULT);
+		path = buffer;
 		CoTaskMemFree(idlist);
 	}
 	fs::current_path(cwd);
-	return result;
+	return path;
 }
 
-
-// ファイルをゴミ箱に削除
-int MoveFileToTrashCan(const char *Path) {
-	auto wPath = u8(Path);
-	wPath += L'\0';			// for PCZZSTR
-	SHFILEOPSTRUCTW op{ 0, FO_DELETE, wPath.c_str(), nullptr, FOF_SILENT | FOF_NOCONFIRMATION | FOF_ALLOWUNDO | FOF_NOERRORUI };
-	return SHFileOperationW(&op);
-}
-
-
-std::string MakeNumString(LONGLONG Num) {
-	std::stringstream ss;
-	ss.imbue(std::locale{ "" });
-	ss << std::fixed << Num;
-	return ss.str();
-}
-
-
-// ShellExecute等で使用されるファイル名を修正
-// UNCでない場合に末尾の半角スペースは無視されるため拡張子が補完されなくなるまで半角スペースを追加
-// 現在UNC対応の予定は無い
-char* MakeDistinguishableFileName(char* Out, const char* In) {
-	if (strlen(GetFileExt(GetFileName(In))) > 0)
-		strcpy(Out, In);
-	else {
-		auto const Fname = u8(GetFileName(In));
-		auto current = u8(In);
-		WIN32_FIND_DATAW data;
-		for (HANDLE handle; (handle = FindFirstFileW((current + L".*"sv).c_str(), &data)) != INVALID_HANDLE_VALUE; current += L' ') {
-			bool invalid = false;
-			do {
-				if (data.cFileName != Fname) {
-					invalid = true;
-					break;
-				}
-			} while (FindNextFileW(handle, &data));
-			FindClose(handle);
-			if (!invalid)
-				break;
-		}
-		strcpy(Out, u8(current).c_str());
-	}
-	return Out;
-}
 
 #if defined(HAVE_TANDEM)
 /*----- ファイルサイズからEXTENTサイズの計算を行う ----------------------------

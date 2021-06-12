@@ -34,7 +34,7 @@ struct HOSTLISTDATA : HOSTDATA, std::enable_shared_from_this<HOSTLISTDATA> {
 	std::shared_ptr<HOSTLISTDATA> Prev;
 	std::shared_ptr<HOSTLISTDATA> Child;
 	std::shared_ptr<HOSTLISTDATA> Parent;
-	HOSTLISTDATA(HOSTDATA const& Set) : HOSTDATA{ Set } {}
+	explicit HOSTLISTDATA(HOSTDATA const& Set) : HOSTDATA{ Set } {}
 
 	// 次の設定番号のノードを返す
 	//   empty=次はない
@@ -71,9 +71,9 @@ static int IsNodeGroup(int Num);
 static bool DispHostSetDlg(HWND hDlg);
 
 /* 設定値 */
-extern char UserMailAdrs[USER_MAIL_LEN+1];
+extern std::wstring UserMailAdrs;
 extern HFONT ListFont;
-extern char DefaultLocalPath[FMAX_PATH+1];
+extern std::wstring DefaultLocalPath;
 extern int ConnectAndSet;
 extern SIZE HostDlgSize;
 extern int NoRasControl;
@@ -151,7 +151,8 @@ struct HostList {
 			break;
 		case HOST_FOLDER:
 			CopyDefaultHost(&TmpHost);
-			if (int Level1 = -1; InputDialog(group_dlg, hDlg, NULL, TmpHost.HostName, HOST_NAME_LEN + 1)) {
+			if (InputDialog(group_dlg, hDlg, 0, TmpHost.HostName, HOST_NAME_LEN + 1)) {
+				int Level1 = -1;
 				if (auto hItem = (HTREEITEM)SendDlgItemMessageW(hDlg, HOST_LIST, TVM_GETNEXTITEM, TVGN_CARET, 0)) {
 					TVITEMW Item{ TVIF_PARAM, hItem };
 					SendDlgItemMessageW(hDlg, HOST_LIST, TVM_GETITEMW, TVGN_CARET, (LPARAM)&Item);
@@ -173,7 +174,10 @@ struct HostList {
 				CurrentHost = (int)Item.lParam;
 				CopyHostFromList(CurrentHost, &TmpHost);
 				int Level1 = IsNodeGroup(CurrentHost);
-				if (Level1 == NO && DispHostSetDlg(hDlg) || Level1 == YES && InputDialog(group_dlg, hDlg, NULL, TmpHost.HostName, HOST_NAME_LEN + 1)) {
+				auto set = Level1 == NO && DispHostSetDlg(hDlg);
+				if (!set && Level1 == YES)
+					set = InputDialog(group_dlg, hDlg, 0, TmpHost.HostName, HOST_NAME_LEN + 1);
+				if (set) {
 					UpdateHostToList(CurrentHost, &TmpHost);
 					SendAllHostNames(GetDlgItem(hDlg, HOST_LIST), CurrentHost);
 				}
@@ -185,7 +189,7 @@ struct HostList {
 				SendDlgItemMessageW(hDlg, HOST_LIST, TVM_GETITEMW, TVGN_CARET, (LPARAM)&Item);
 				CurrentHost = (int)Item.lParam;
 				CopyHostFromList(CurrentHost, &TmpHost);
-				strcpy(TmpHost.BookMark, "\0");
+				TmpHost.BookMark = {};
 				CurrentHost++;
 				AddHostToList(&TmpHost, CurrentHost, SET_LEVEL_SAME);
 				SendAllHostNames(GetDlgItem(hDlg, HOST_LIST), CurrentHost);
@@ -570,7 +574,7 @@ int CopyHostFromListInConnect(int Num, HOSTDATA* Set) {
 	if (Num < 0 || Hosts <= Num)
 		return FFFTP_FAIL;
 	auto Pos = GetNode(Num);
-	strcpy(Set->ChmodCmd, Pos->ChmodCmd);
+	Set->ChmodCmd = Pos->ChmodCmd;
 	Set->Port = Pos->Port;
 	Set->Anonymous = Pos->Anonymous;
 	Set->KanjiCode = Pos->KanjiCode;
@@ -587,7 +591,6 @@ int CopyHostFromListInConnect(int Num, HOSTDATA* Set) {
 	Set->UseFTPES = Pos->UseFTPES;
 	Set->UseFTPIS = Pos->UseFTPIS;
 	Set->UseSFTP = Pos->UseSFTP;
-	strcpy(Set->PrivateKey, Pos->PrivateKey);
 	Set->MaxThreadCount = Pos->MaxThreadCount;
 	Set->ReuseCmdSkt = Pos->ReuseCmdSkt;
 	Set->UseMLSD = Pos->UseMLSD;
@@ -601,51 +604,51 @@ int CopyHostFromListInConnect(int Num, HOSTDATA* Set) {
 
 
 // 設定値リストのブックマークを更新
-int SetHostBookMark(int Num, char* Bmask, int Len) {
+int SetHostBookMark(int Num, std::vector<std::wstring>&& bookmark) {
 	if (Num < 0 || Hosts <= Num)
 		return FFFTP_FAIL;
 	auto Pos = GetNode(Num);
-	memcpy(Pos->BookMark, Bmask, Len);
+	Pos->BookMark = std::move(bookmark);
 	return FFFTP_SUCCESS;
 }
 
 
 // 設定値リストのブックマーク文字列を返す
-char* AskHostBookMark(int Num) {
+std::optional<std::vector<std::wstring>> AskHostBookMark(int Num) {
 	if (Num < 0 || Hosts <= Num)
-		return nullptr;
+		return {};
 	auto Pos = GetNode(Num);
 	return Pos->BookMark;
 }
 
 
 // 設定値リストのディレクトリを更新
-int SetHostDir(int Num, const char* LocDir, const char* HostDir) {
+int SetHostDir(int Num, std::wstring_view LocDir, std::wstring_view HostDir) {
 	if (Num < 0 || Hosts <= Num)
 		return FFFTP_FAIL;
 	auto Pos = GetNode(Num);
-	strcpy(Pos->LocalInitDir, LocDir);
-	strcpy(Pos->RemoteInitDir, HostDir);
+	Pos->LocalInitDir = LocDir;
+	Pos->RemoteInitDir = HostDir;
 	return FFFTP_SUCCESS;
 }
 
 
 // 設定値リストのパスワードを更新
-int SetHostPassword(int Num, char* Pass) {
+int SetHostPassword(int Num, std::wstring const& Pass) {
 	if (Num < 0 || Hosts <= Num)
 		return FFFTP_FAIL;
 	auto Pos = GetNode(Num);
-	strcpy(Pos->PassWord, Pass);
+	Pos->PassWord = Pass;
 	return FFFTP_SUCCESS;
 }
 
 
 // 指定の設定名を持つ設定の番号を返す
 //   -1=見つからない
-int SearchHostName(char* Name) {
+int SearchHostName(std::wstring_view name) {
 	auto Pos = HostListTop;
 	for (int i = 0; i < Hosts; i++) {
-		if (strcmp(Name, Pos->HostName) == 0)
+		if (Pos->HostName == name)
 			return i;
 		Pos = Pos->GetNext();
 	}
@@ -718,7 +721,7 @@ void SetDefaultHost(HOSTDATA* Set) {
 }
 
 HostExeptPassword::HostExeptPassword() {
-	strcpy(LocalInitDir, DefaultLocalPath);
+	LocalInitDir = DefaultLocalPath;
 }
 
 
@@ -732,11 +735,10 @@ static void SendAllHostNames(HWND hWnd, int Cur) {
 	auto Pos = HostListTop;
 	for (int i = 0; i < Hosts; i++) {
 		size_t CurLevel = Pos->GetLevel();
-		auto whost = u8(Pos->HostName);
 		TVINSERTSTRUCTW is{
 			.hParent = CurLevel == 0 ? TVI_ROOT : Level[CurLevel - 1],
 			.hInsertAfter = TVI_LAST,
-			.item = { .mask = TVIF_TEXT | TVIF_CHILDREN | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM, .pszText = data(whost), .cChildren = 1, .lParam = i },
+			.item = { .mask = TVIF_TEXT | TVIF_CHILDREN | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM, .pszText = data(Pos->HostName), .cChildren = 1, .lParam = i },
 		};
 		if (!(Pos->Level & SET_LEVEL_GROUP))
 			is.item.iImage = is.item.iSelectedImage = 2;
@@ -765,85 +767,47 @@ static int IsNodeGroup(int Num) {
 }
 
 
-/*----- WS_FTP.INIからのインポート --------------------------------------------
-*
-*	Parameter
-*		なし
-*
-*	Return Value
-*		なし
-*----------------------------------------------------------------------------*/
-
-void ImportFromWSFTP(void)
-{
-	FILE *Strm;
-	HOSTDATA Host;
-	int InHost;
-
-	if (auto const path = SelectFile(true, GetMainHwnd(), IDS_OPEN_WSFTPINI, L"WS_FTP.INI", nullptr, { FileType::Ini, FileType::All }); !std::empty(path))
-	{
-		if((Strm = _wfopen(path.c_str(), L"rt")) != NULL)
-		{
-			char Buf[FMAX_PATH + 1];
-			InHost = NO;
-			while(fgets(Buf, FMAX_PATH, Strm) != NULL)
-			{
-				if(Buf[0] == '[')
-				{
-					if(InHost == YES)
-					{
-						AddHostToList(&Host, -1, 0);
-						InHost = NO;
+// WS_FTP.INIからのインポート
+void ImportFromWSFTP() {
+	if (auto const path = SelectFile(true, GetMainHwnd(), IDS_OPEN_WSFTPINI, L"WS_FTP.INI", nullptr, { FileType::Ini, FileType::All }); !path.empty())
+		if (std::ifstream fs{ path }) {
+			HOSTDATA host;
+			auto hasHost = false;
+			for (std::string line; getline(fs, line);) {
+				if (line[0] == '[') {
+					if (hasHost) {
+						AddHostToList(&host, -1, 0);
+						hasHost = false;
 					}
-					if(_stricmp(Buf, "[_config_]\n") != 0)
-					{
-						CopyDefaultHost(&Host);
-
-						*(Buf + strlen(Buf) - 2) = NUL;
-						memset(Host.HostName, NUL, HOST_NAME_LEN+1);
-						strncpy(Host.HostName, Buf+1, HOST_NAME_LEN);
-						InHost = YES;
+					if (!ieq(line, "[_config_]"sv)) {
+						CopyDefaultHost(&host);
+						host.HostName = u8({ &line[1], size(line) - 2 });
+						hasHost = true;
 					}
-				}
-				else if(InHost == YES)
-				{
-					FormatIniString(Buf);
-
-					if(_strnicmp(Buf, "HOST=", 5) == 0)
-					{
-						memset(Host.HostAdrs, NUL, HOST_ADRS_LEN+1);
-						strncpy(Host.HostAdrs, Buf+5, HOST_ADRS_LEN);
-					}
-					else if(_strnicmp(Buf, "UID=", 4) == 0)
-					{
-						memset(Host.UserName, NUL, USER_NAME_LEN+1);
-						strncpy(Host.UserName, Buf+4, USER_NAME_LEN);
-						if(strcmp(Host.UserName, "anonymous") == 0)
-							strcpy(Host.PassWord, UserMailAdrs);
-					}
-					else if(_strnicmp(Buf, "LOCDIR=", 7) == 0)
-					{
-						memset(Host.LocalInitDir, NUL, INIT_DIR_LEN+1);
-						strncpy(Host.LocalInitDir, Buf+7, INIT_DIR_LEN);
-					}
-					else if(_strnicmp(Buf, "DIR=", 4) == 0)
-					{
-						memset(Host.RemoteInitDir, NUL, INIT_DIR_LEN+1);
-						strncpy(Host.RemoteInitDir, Buf+4, INIT_DIR_LEN);
-					}
-					else if(_strnicmp(Buf, "PASVMODE=", 9) == 0)
-						Host.Pasv = (atoi(Buf+9) == 0) ? 0 : 1;
-					else if(_strnicmp(Buf, "FIREWALL=", 9) == 0)
-						Host.FireWall = (atoi(Buf+9) == 0) ? 0 : 1;
+				} else if (auto pos = line.find('='); hasHost && pos != std::string::npos) {
+					auto name = lc(line.substr(0, pos));
+					name.erase(std::remove_if(begin(name), end(name), [](auto ch) { return ch == ' ' || ch == '\t' || ch == '\n'; }), end(name));
+					auto value = line.substr(pos + 1);
+					value.erase(std::remove_if(begin(value), end(value), [](char ch) { return ch == '"' || ch == '\n'; }), end(value));
+					if (name == "host"sv)
+						host.HostAdrs = u8(value);
+					else if (name == "uid"sv) {
+						host.UserName = u8(value);
+						if (value == "anonymous"sv)
+							host.PassWord = UserMailAdrs;
+					} else if (name == "locdir"sv)
+						host.LocalInitDir = u8(value);
+					else if (name == "dir"sv)
+						host.RemoteInitDir = u8(value);
+					else if (name == "pasvmode"sv)
+						host.Pasv = stoi(value) == 0 ? 0 : 1;
+					else if (name == "firewall"sv)
+						host.FireWall = stoi(value) == 0 ? 0 : 1;
 				}
 			}
-
-			if(InHost == YES)
-				AddHostToList(&Host, -1, 0);
-			fclose(Strm);
+			if (hasHost)
+				AddHostToList(&host, -1, 0);
 		}
-	}
-	return;
 }
 
 
@@ -857,12 +821,12 @@ struct General {
 		SendDlgItemMessageW(hDlg, HSET_PASS, EM_LIMITTEXT, PASSWORD_LEN, 0);
 		SendDlgItemMessageW(hDlg, HSET_LOCAL, EM_LIMITTEXT, INIT_DIR_LEN, 0);
 		SendDlgItemMessageW(hDlg, HSET_REMOTE, EM_LIMITTEXT, INIT_DIR_LEN, 0);
-		SetText(hDlg, HSET_HOST, u8(TmpHost.HostName));
-		SetText(hDlg, HSET_ADRS, u8(TmpHost.HostAdrs));
-		SetText(hDlg, HSET_USER, u8(TmpHost.UserName));
-		SetText(hDlg, HSET_PASS, u8(TmpHost.PassWord));
-		SetText(hDlg, HSET_LOCAL, u8(TmpHost.LocalInitDir));
-		SetText(hDlg, HSET_REMOTE, u8(TmpHost.RemoteInitDir));
+		SetText(hDlg, HSET_HOST, TmpHost.HostName);
+		SetText(hDlg, HSET_ADRS, TmpHost.HostAdrs);
+		SetText(hDlg, HSET_USER, TmpHost.UserName);
+		SetText(hDlg, HSET_PASS, TmpHost.PassWord);
+		SetText(hDlg, HSET_LOCAL, TmpHost.LocalInitDir);
+		SetText(hDlg, HSET_REMOTE, TmpHost.RemoteInitDir);
 		SendDlgItemMessageW(hDlg, HSET_ANONYMOUS, BM_SETCHECK, TmpHost.Anonymous, 0);
 		SendDlgItemMessageW(hDlg, HSET_LASTDIR, BM_SETCHECK, TmpHost.LastDir, 0);
 		if (AskConnecting() == NO)
@@ -872,22 +836,20 @@ struct General {
 	static INT_PTR OnNotify(HWND hDlg, NMHDR* nmh) {
 		switch (nmh->code) {
 		case PSN_APPLY:
-			strncpy_s(TmpHost.HostName, HOST_NAME_LEN + 1, u8(GetText(hDlg, HSET_HOST)).c_str(), _TRUNCATE);
-			strncpy_s(TmpHost.HostAdrs, HOST_ADRS_LEN + 1, u8(GetText(hDlg, HSET_ADRS)).c_str(), _TRUNCATE);
-			RemoveTailingSpaces(TmpHost.HostAdrs);
-			strncpy_s(TmpHost.UserName, USER_NAME_LEN + 1, u8(GetText(hDlg, HSET_USER)).c_str(), _TRUNCATE);
-			strncpy_s(TmpHost.PassWord, PASSWORD_LEN + 1, u8(GetText(hDlg, HSET_PASS)).c_str(), _TRUNCATE);
-			strncpy_s(TmpHost.LocalInitDir, INIT_DIR_LEN + 1, u8(GetText(hDlg, HSET_LOCAL)).c_str(), _TRUNCATE);
-			strncpy_s(TmpHost.RemoteInitDir, INIT_DIR_LEN + 1, u8(GetText(hDlg, HSET_REMOTE)).c_str(), _TRUNCATE);
+			TmpHost.HostName = GetText(hDlg, HSET_HOST);
+			TmpHost.HostAdrs = GetText(hDlg, HSET_ADRS);
+			if (auto const p = TmpHost.HostAdrs.find_last_not_of(L' '); p != std::wstring::npos && p + 1 != size(TmpHost.HostAdrs))
+				TmpHost.HostAdrs.erase(p + 1);
+			TmpHost.UserName = GetText(hDlg, HSET_USER);
+			TmpHost.PassWord = GetText(hDlg, HSET_PASS);
+			TmpHost.LocalInitDir = GetText(hDlg, HSET_LOCAL);
+			TmpHost.RemoteInitDir = GetText(hDlg, HSET_REMOTE);
 			TmpHost.Anonymous = (int)SendDlgItemMessageW(hDlg, HSET_ANONYMOUS, BM_GETCHECK, 0, 0);
 			TmpHost.LastDir = (int)SendDlgItemMessageW(hDlg, HSET_LASTDIR, BM_GETCHECK, 0, 0);
-			if ((strlen(TmpHost.HostName) == 0) && (strlen(TmpHost.HostAdrs) > 0)) {
-				memset(TmpHost.HostName, NUL, HOST_NAME_LEN + 1);
-				strncpy(TmpHost.HostName, TmpHost.HostAdrs, HOST_NAME_LEN);
-			} else if ((strlen(TmpHost.HostName) > 0) && (strlen(TmpHost.HostAdrs) == 0)) {
-				memset(TmpHost.HostAdrs, NUL, HOST_ADRS_LEN + 1);
-				strncpy(TmpHost.HostAdrs, TmpHost.HostName, HOST_ADRS_LEN);
-			}
+			if (empty(TmpHost.HostName) && !empty(TmpHost.HostAdrs))
+				TmpHost.HostName = TmpHost.HostAdrs;
+			else if (!empty(TmpHost.HostName) && empty(TmpHost.HostAdrs))
+				TmpHost.HostAdrs = TmpHost.HostName;
 			return PSNRET_NOERROR;
 		case PSN_HELP:
 			ShowHelp(IDH_HELP_TOPIC_0000028);
@@ -898,8 +860,8 @@ struct General {
 	static void OnCommand(HWND hDlg, WORD id) {
 		switch (id) {
 		case HSET_LOCAL_BR:
-			if (SelectDir(hDlg, TmpHost.LocalInitDir, INIT_DIR_LEN) == TRUE)
-				SetText(hDlg, HSET_LOCAL, u8(TmpHost.LocalInitDir));
+			if (auto path = SelectDir(hDlg); !path.empty())
+				SetText(hDlg, HSET_LOCAL, path);
 			break;
 		case HSET_REMOTE_CUR:
 			SetText(hDlg, HSET_REMOTE, AskRemoteCurDir());
@@ -909,7 +871,7 @@ struct General {
 				SetText(hDlg, HSET_USER, L"anonymous");
 				auto wStyle = GetWindowLongPtrW(GetDlgItem(hDlg, HSET_PASS), GWL_STYLE);
 				SetWindowLongPtrW(GetDlgItem(hDlg, HSET_PASS), GWL_STYLE, wStyle & ~ES_PASSWORD);
-				SetText(hDlg, HSET_PASS, u8(UserMailAdrs));
+				SetText(hDlg, HSET_PASS, UserMailAdrs);
 			} else {
 				SetText(hDlg, HSET_USER, L"");
 				auto wStyle = GetWindowLongPtrW(GetDlgItem(hDlg, HSET_PASS), GWL_STYLE);
@@ -926,22 +888,15 @@ struct Advanced {
 	static constexpr DWORD flag = PSP_HASHELP;
 	static INT_PTR OnInit(HWND hDlg) {
 		SendDlgItemMessageW(hDlg, HSET_PORT, EM_LIMITTEXT, 5, 0);
-		char Tmp[20];
-		sprintf(Tmp, "%d", TmpHost.Port);
-		SetText(hDlg, HSET_PORT, u8(Tmp));
+		SetText(hDlg, HSET_PORT, std::to_wstring(TmpHost.Port));
 		SendDlgItemMessageW(hDlg, HSET_ACCOUNT, EM_LIMITTEXT, ACCOUNT_LEN, 0);
-		SetText(hDlg, HSET_ACCOUNT, u8(TmpHost.Account));
+		SetText(hDlg, HSET_ACCOUNT, TmpHost.Account);
 		SendDlgItemMessageW(hDlg, HSET_PASV, BM_SETCHECK, TmpHost.Pasv, 0);
 		SendDlgItemMessageW(hDlg, HSET_FIREWALL, BM_SETCHECK, TmpHost.FireWall, 0);
 		SendDlgItemMessageW(hDlg, HSET_SYNCMOVE, BM_SETCHECK, TmpHost.SyncMove, 0);
 		for (int i = -12; i <= 12; i++) {
-			if (i == 0)
-				sprintf(Tmp, "GMT");
-			else if (i == 9)
-				sprintf(Tmp, MSGJPN133, i);
-			else
-				sprintf(Tmp, "GMT%+02d:00", i);
-			SendDlgItemMessageW(hDlg, HSET_TIMEZONE, CB_ADDSTRING, 0, (LPARAM)u8(Tmp).c_str());
+			auto tz = i == 0 ? L"GMT"s : i == 9 ? GetString(IDS_MSGJPN133) : strprintf(L"GMT%+02d:00", i);
+			SendDlgItemMessageW(hDlg, HSET_TIMEZONE, CB_ADDSTRING, 0, (LPARAM)tz.c_str());
 		}
 		SendDlgItemMessageW(hDlg, HSET_TIMEZONE, CB_SETCURSEL, (UINT_PTR)TmpHost.TimeZone + 12, 0);
 
@@ -949,7 +904,7 @@ struct Advanced {
 			SendDlgItemMessageW(hDlg, HSET_SECURITY, CB_ADDSTRING, 0, (LPARAM)GetString(resourceId).c_str());
 		SendDlgItemMessageW(hDlg, HSET_SECURITY, CB_SETCURSEL, TmpHost.Security, 0);
 		SendDlgItemMessageW(hDlg, HSET_INITCMD, EM_LIMITTEXT, INITCMD_LEN, 0);
-		SetText(hDlg, HSET_INITCMD, u8(TmpHost.InitCmd));
+		SetText(hDlg, HSET_INITCMD, TmpHost.InitCmd);
 		return TRUE;
 	}
 	static INT_PTR OnNotify(HWND hDlg, NMHDR* nmh) {
@@ -959,10 +914,10 @@ struct Advanced {
 			TmpHost.FireWall = (int)SendDlgItemMessageW(hDlg, HSET_FIREWALL, BM_GETCHECK, 0, 0);
 			TmpHost.SyncMove = (int)SendDlgItemMessageW(hDlg, HSET_SYNCMOVE, BM_GETCHECK, 0, 0);
 			TmpHost.Port = GetDecimalText(hDlg, HSET_PORT);
-			strncpy_s(TmpHost.Account, ACCOUNT_LEN + 1, u8(GetText(hDlg, HSET_ACCOUNT)).c_str(), _TRUNCATE);
+			TmpHost.Account = GetText(hDlg, HSET_ACCOUNT);
 			TmpHost.TimeZone = (int)SendDlgItemMessageW(hDlg, HSET_TIMEZONE, CB_GETCURSEL, 0, 0) - 12;
 			TmpHost.Security = (int)SendDlgItemMessageW(hDlg, HSET_SECURITY, CB_GETCURSEL, 0, 0);
-			strncpy_s(TmpHost.InitCmd, INITCMD_LEN + 1, u8(GetText(hDlg, HSET_INITCMD)).c_str(), _TRUNCATE);
+			TmpHost.InitCmd = GetText(hDlg, HSET_INITCMD);
 			return PSNRET_NOERROR;
 		}
 		case PSN_HELP:
@@ -973,12 +928,9 @@ struct Advanced {
 	}
 	static void OnCommand(HWND hDlg, WORD id) {
 		switch (id) {
-		case HSET_PORT_NOR: {
-			char Tmp[20];
-			sprintf(Tmp, "%d", IPPORT_FTP);
-			SetText(hDlg, HSET_PORT, u8(Tmp));
+		case HSET_PORT_NOR:
+			SetText(hDlg, HSET_PORT, std::to_wstring(IPPORT_FTP));
 			break;
-		}
 		}
 	}
 };
@@ -992,8 +944,6 @@ struct KanjiCode {
 		KanjiButton::Set(hDlg, TmpHost.KanjiCode);
 		SendDlgItemMessageW(hDlg, HSET_HANCNV, BM_SETCHECK, TmpHost.KanaCnv, 0);
 		NameKanjiButton::Set(hDlg, TmpHost.NameKanjiCode);
-		if (!SupportIdn)
-			EnableWindow(GetDlgItem(hDlg, HSET_FN_UTF8HFSX_CNV), FALSE);
 		SendDlgItemMessageW(hDlg, HSET_FN_HANCNV, BM_SETCHECK, TmpHost.NameKanaCnv, 0);
 		return TRUE;
 	}
@@ -1055,7 +1005,7 @@ struct Dialup {
 			EnableWindow(GetDlgItem(hDlg, HSET_DIALUSETHIS), FALSE);
 			EnableWindow(GetDlgItem(hDlg, HSET_DIALNOTIFY), FALSE);
 		}
-		SetRasEntryToComboBox(hDlg, HSET_DIALENTRY, u8(TmpHost.DialEntry));
+		SetRasEntryToComboBox(hDlg, HSET_DIALENTRY, TmpHost.DialEntry);
 		return TRUE;
 	}
 	static INT_PTR OnNotify(HWND hDlg, NMHDR* nmh) {
@@ -1064,7 +1014,7 @@ struct Dialup {
 			TmpHost.Dialup = (int)SendDlgItemMessageW(hDlg, HSET_DIALUP, BM_GETCHECK, 0, 0);
 			TmpHost.DialupAlways = (int)SendDlgItemMessageW(hDlg, HSET_DIALUSETHIS, BM_GETCHECK, 0, 0);
 			TmpHost.DialupNotify = (int)SendDlgItemMessageW(hDlg, HSET_DIALNOTIFY, BM_GETCHECK, 0, 0);
-			strncpy_s(TmpHost.DialEntry, RAS_NAME_LEN + 1, u8(GetText(hDlg, HSET_DIALENTRY)).c_str(), _TRUNCATE);
+			TmpHost.DialEntry = GetText(hDlg, HSET_DIALENTRY);
 			return PSNRET_NOERROR;
 		case PSN_HELP:
 			ShowHelp(IDH_HELP_TOPIC_0000031);
@@ -1100,9 +1050,9 @@ struct Special {
 	static constexpr DWORD flag = PSP_HASHELP;
 	static INT_PTR OnInit(HWND hDlg) {
 		SendDlgItemMessageW(hDlg, HSET_CHMOD_CMD, EM_LIMITTEXT, CHMOD_CMD_LEN, 0);
-		SetText(hDlg, HSET_CHMOD_CMD, u8(TmpHost.ChmodCmd));
+		SetText(hDlg, HSET_CHMOD_CMD, TmpHost.ChmodCmd);
 		SendDlgItemMessageW(hDlg, HSET_LS_FNAME, EM_LIMITTEXT, NLST_NAME_LEN, 0);
-		SetText(hDlg, HSET_LS_FNAME, u8(TmpHost.LsName));
+		SetText(hDlg, HSET_LS_FNAME, TmpHost.LsName);
 		SendDlgItemMessageW(hDlg, HSET_LISTCMD, BM_SETCHECK, TmpHost.ListCmdOnly, 0);
 		if (TmpHost.ListCmdOnly == YES)
 			EnableWindow(GetDlgItem(hDlg, HSET_NLST_R), FALSE);
@@ -1132,8 +1082,8 @@ struct Special {
 	static INT_PTR OnNotify(HWND hDlg, NMHDR* nmh) {
 		switch (nmh->code) {
 		case PSN_APPLY:
-			strncpy_s(TmpHost.ChmodCmd, CHMOD_CMD_LEN + 1, u8(GetText(hDlg, HSET_CHMOD_CMD)).c_str(), _TRUNCATE);
-			strncpy_s(TmpHost.LsName, NLST_NAME_LEN + 1, u8(GetText(hDlg, HSET_LS_FNAME)).c_str(), _TRUNCATE);
+			TmpHost.ChmodCmd = GetText(hDlg, HSET_CHMOD_CMD);
+			TmpHost.LsName = GetText(hDlg, HSET_LS_FNAME);
 			TmpHost.ListCmdOnly = (int)SendDlgItemMessageW(hDlg, HSET_LISTCMD, BM_GETCHECK, 0, 0);
 			TmpHost.UseMLSD = (int)SendDlgItemMessageW(hDlg, HSET_MLSDCMD, BM_GETCHECK, 0, 0);
 			TmpHost.UseNLST_R = (int)SendDlgItemMessageW(hDlg, HSET_NLST_R, BM_GETCHECK, 0, 0);
@@ -1149,10 +1099,10 @@ struct Special {
 	static void OnCommand(HWND hDlg, WORD id) {
 		switch (id) {
 		case HSET_CHMOD_NOR:
-			SetText(hDlg, HSET_CHMOD_CMD, u8(CHMOD_CMD_NOR));
+			SetText(hDlg, HSET_CHMOD_CMD, Host::DefaultChmod);
 			break;
 		case HSET_LS_FNAME_NOR:
-			SetText(hDlg, HSET_LS_FNAME, u8(LS_FNAME));
+			SetText(hDlg, HSET_LS_FNAME, Host::DefaultLsOption);
 			break;
 		case HSET_LISTCMD:
 			if (SendDlgItemMessageW(hDlg, HSET_LISTCMD, BM_GETCHECK, 0, 0) == 0) {
@@ -1228,11 +1178,11 @@ struct Feature {
 	static constexpr DWORD flag = PSP_HASHELP;
 	static INT_PTR OnInit(HWND hDlg) {
 		SendDlgItemMessageW(hDlg, HSET_THREAD_COUNT, EM_LIMITTEXT, (WPARAM)1, 0);
-		SetDecimalText(hDlg, HSET_THREAD_COUNT, TmpHost.MaxThreadCount);
+		SetText(hDlg, HSET_THREAD_COUNT, std::to_wstring(TmpHost.MaxThreadCount));
 		SendDlgItemMessageW(hDlg, HSET_THREAD_COUNT_SPN, UDM_SETRANGE, 0, (LPARAM)MAKELONG(MAX_DATA_CONNECTION, 1));
 		SendDlgItemMessageW(hDlg, HSET_REUSE_SOCKET, BM_SETCHECK, TmpHost.ReuseCmdSkt, 0);
 		SendDlgItemMessageW(hDlg, HSET_NOOP_INTERVAL, EM_LIMITTEXT, (WPARAM)3, 0);
-		SetDecimalText(hDlg, HSET_NOOP_INTERVAL, TmpHost.NoopInterval);
+		SetText(hDlg, HSET_NOOP_INTERVAL, std::to_wstring(TmpHost.NoopInterval));
 		SendDlgItemMessageW(hDlg, HSET_NOOP_INTERVAL_SPN, UDM_SETRANGE, 0, (LPARAM)MAKELONG(300, 0));
 		for (auto resourceId : { IDS_MSGJPN335, IDS_MSGJPN336, IDS_MSGJPN337, IDS_MSGJPN338 })
 			SendDlgItemMessageW(hDlg, HSET_ERROR_MODE, CB_ADDSTRING, 0, (LPARAM)GetString(resourceId).c_str());
